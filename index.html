@@ -115,19 +115,45 @@ function showLogin(){
         h('button',{class:'ghost',onclick:async()=>{try{await signInWithPopup(auth,new GoogleAuthProvider())}catch(e){err.textContent=authMsg(e)}}},'ใช้ Google'))));
 }
 
+async function createProfile(uid,base,code){
+  try{await setDoc(doc(db,'users',uid),{...base,role:'resident',approved:true,joinCode:code,createdAt:serverTimestamp()})}
+  catch(e){
+    if(e.code==='permission-denied'){const x=new Error('รหัสหมู่บ้านไม่ถูกต้อง หรือยังไม่เปิดรับสมัคร');x.isCode=true;throw x}
+    throw e;
+  }
+}
+
+function settingsCard(){
+  const on=h('input',{type:'checkbox',style:'width:auto;margin:0 10px 0 0'});
+  const code=h('input',{placeholder:'ตั้งรหัสที่ลูกบ้านต้องกรอก',autocomplete:'off'});
+  const msg=h('p',{class:'meta'});
+  getDoc(doc(db,'settings','app')).then(x=>{if(x.exists()){on.checked=!!x.data().autoApprove;code.value=x.data().joinCode||''}}).catch(()=>{});
+  return h('div',{class:'card'},h('h3',{},'การรับสมาชิก'),
+    h('label',{style:'display:flex;align-items:center;margin:10px 0'},on,'เปิดรับสมัครด้วยรหัสหมู่บ้าน'),
+    h('label',{},'รหัสหมู่บ้าน (บอกลูกบ้านเอง)'),code,
+    h('button',{class:'sm',onclick:async()=>{
+      if(on.checked&&!code.value.trim()){msg.textContent='กรุณาตั้งรหัสหมู่บ้านก่อน';return}
+      try{await setDoc(doc(db,'settings','app'),{autoApprove:on.checked,joinCode:code.value.trim()});msg.textContent='บันทึกแล้ว'}
+      catch(e){msg.textContent='บันทึกไม่สำเร็จ: '+e.message}
+    }},'บันทึก'),msg);
+}
+
 function showSignup(){
   const name=h('input',{autocomplete:'name'}),house=h('input',{placeholder:'เช่น 12/3'}),
     phone=h('input',{type:'tel',inputmode:'numeric',autocomplete:'username'}),
     pwf=pwField('new-password','ตัวอักษรหรือตัวเลข 6 ตัว',6),pw=pwf.input,
     pwf2=pwField('new-password','พิมพ์รหัสผ่านอีกครั้ง',6),pw2=pwf2.input;
+  const code=h('input',{placeholder:'ถามผู้ใหญ่บ้าน',autocomplete:'off'});
   const err=h('p',{class:'err'});
   show(h('div',{class:'bar'},h('h1',{},'สมัครเป็นลูกบ้าน'),h('button',{class:'ghost sm',onclick:showLogin},'‹ กลับ')),
     h('div',{class:'card'},
       h('label',{},'ชื่อ-นามสกุล'),name,h('label',{},'บ้านเลขที่'),house,
       h('label',{},'เบอร์โทร (ใช้เป็นชื่อผู้ใช้)'),phone,
       h('label',{},'ตั้งรหัสผ่าน (6 ตัวพอดี)'),pwf.row,h('label',{},'ยืนยันรหัสผ่าน'),pwf2.row,
+      h('label',{},'รหัสหมู่บ้าน'),code,
       h('button',{onclick:async()=>{
         if(!name.value.trim()||!house.value.trim()){err.textContent='กรุณากรอกชื่อและบ้านเลขที่';return}
+        if(!code.value.trim()){err.textContent='กรุณากรอกรหัสหมู่บ้าน';return}
         if(!okPhone(phone.value)){err.textContent='เบอร์โทรต้องขึ้นต้นด้วย 0 และมี 9–10 หลัก';return}
         if(pw.value.length!==6){err.textContent='รหัสผ่านต้องมี 6 ตัวพอดี';return}
         if(pw.value!==pw2.value){err.textContent='รหัสผ่านสองช่องไม่ตรงกัน';return}
@@ -135,11 +161,12 @@ function showSignup(){
         try{
           const c=await createUserWithEmailAndPassword(auth,toEmail(phone.value),pw.value);
           user=c.user;
-          await setDoc(doc(db,'users',user.uid),{name:name.value.trim(),house:house.value.trim(),phone:phone.value.replace(/\D/g,''),email:'',role:'resident',approved:false,createdAt:serverTimestamp()});
+          await createProfile(user.uid,{name:name.value.trim(),house:house.value.trim(),phone:phone.value.replace(/\D/g,''),email:''},code.value.trim());
           signingUp=false;watchProfile();
         }catch(e){
-          signingUp=false;err.textContent=authMsg(e);
-          if(auth.currentUser){user=auth.currentUser;showRegister()}
+          err.textContent=e.isCode?e.message:authMsg(e);
+          if(auth.currentUser){try{await auth.currentUser.delete()}catch(_){await signOut(auth).catch(()=>{})}}
+          user=null;setTimeout(()=>{signingUp=false},800);
         }
       }},'ส่งคำขอสมัคร'),err));
 }
@@ -148,16 +175,19 @@ function showRegister(){
   const name=h('input',{value:user.displayName||'',autocomplete:'name'});
   const house=h('input',{placeholder:'เช่น 12/3'});
   const phone=h('input',{type:'tel',autocomplete:'tel'});
+  const code=h('input',{placeholder:'ถามผู้ใหญ่บ้าน',autocomplete:'off'});
   const err=h('p',{class:'err'});
   show(h('div',{class:'bar'},h('h1',{},'สมัครเป็นลูกบ้าน'),logoutBtn()),
     h('div',{class:'card'},
       h('label',{},'ชื่อ-นามสกุล'),name,
       h('label',{},'บ้านเลขที่'),house,
       h('label',{},'เบอร์โทร'),phone,
+      h('label',{},'รหัสหมู่บ้าน'),code,
       h('button',{onclick:async()=>{
         if(!name.value.trim()||!house.value.trim()){err.textContent='กรุณากรอกชื่อและบ้านเลขที่';return}
+        if(!code.value.trim()){err.textContent='กรุณากรอกรหัสหมู่บ้าน';return}
         try{
-          await setDoc(doc(db,'users',user.uid),{name:name.value.trim(),house:house.value.trim(),phone:phone.value.trim(),email:user.email||'',role:'resident',approved:false,createdAt:serverTimestamp()});
+          await createProfile(user.uid,{name:name.value.trim(),house:house.value.trim(),phone:phone.value.trim(),email:user.email||''},code.value.trim());
           watchProfile();
         }catch(e){err.textContent=e.message}
       }},'ส่งคำขอสมัคร'),err));
@@ -214,9 +244,11 @@ function composer(){
 }
 
 function renderMembers(body){
+  const list=h('div');
+  body.append(settingsCard(),list);
   unsubs.push(onSnapshot(query(collection(db,'users'),where('approved','==',false)),snap=>{
-    if(snap.empty){body.replaceChildren(h('p',{class:'center meta'},'ไม่มีคำขอที่รออนุมัติ'));return}
-    body.replaceChildren(...snap.docs.map(d=>{const u=d.data();
+    if(snap.empty){list.replaceChildren(h('p',{class:'center meta'},'ไม่มีคำขอที่รออนุมัติ'));return}
+    list.replaceChildren(...snap.docs.map(d=>{const u=d.data();
       return h('div',{class:'card'},h('h3',{},u.name),h('div',{class:'meta'},'บ้าน '+u.house+' · '+(u.phone||'ไม่ระบุเบอร์')+' · '+(u.email||'')),
         h('div',{class:'row',style:'margin-top:10px'},
           h('button',{class:'sm',onclick:()=>updateDoc(doc(db,'users',d.id),{approved:true})},'อนุมัติ'),
