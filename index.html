@@ -85,22 +85,29 @@ function showError(e){
   show(h('div',{class:'card center'},h('h2',{},'เกิดข้อผิดพลาด'),h('p',{},e.message||String(e)),logoutBtn()));
 }
 
+const pwField=(ac,ph,max)=>{
+  const input=h('input',{type:'password',autocomplete:ac,...(ph?{placeholder:ph}:{}),...(max?{maxlength:String(max)}:{})});
+  const btn=h('button',{type:'button','aria-pressed':'false',class:'ghost sm',style:'white-space:nowrap',onclick:()=>{
+    const show=input.type==='password';input.type=show?'text':'password';
+    btn.textContent=show?'ซ่อน':'ดู';btn.setAttribute('aria-pressed',String(show))}},'ดู');
+  return{input,row:h('div',{class:'row',style:'margin:4px 0 12px'},input,btn)};
+};
 const toEmail=p=>p.replace(/\D/g,'')+'@village-announce.app';
 const okPhone=p=>/^0\d{8,9}$/.test(p.replace(/\D/g,''));
-const authMsg=e=>({'auth/invalid-credential':'เบอร์หรือรหัสผ่านไม่ถูกต้อง','auth/user-not-found':'ไม่พบเบอร์นี้ในระบบ','auth/wrong-password':'รหัสผ่านไม่ถูกต้อง','auth/email-already-in-use':'เบอร์นี้สมัครแล้ว กรุณาเข้าสู่ระบบ','auth/weak-password':'รหัสผ่านต้องมีอย่างน้อย 6 ตัว','auth/too-many-requests':'ลองบ่อยเกินไป รอสักครู่แล้วลองใหม่','auth/operation-not-allowed':'ยังไม่ได้เปิดการสมัครด้วยอีเมล/รหัสผ่านใน Firebase','auth/popup-closed-by-user':'ปิดหน้าต่างก่อนเข้าสู่ระบบสำเร็จ'}[e.code]||('เกิดข้อผิดพลาด: '+(e.code||e.message)));
+const authMsg=e=>({'auth/invalid-credential':'เบอร์หรือรหัสผ่านไม่ถูกต้อง','auth/user-not-found':'ไม่พบเบอร์นี้ในระบบ','auth/wrong-password':'รหัสผ่านไม่ถูกต้อง','auth/email-already-in-use':'เบอร์นี้สมัครแล้ว กรุณาเข้าสู่ระบบ','auth/weak-password':'รหัสผ่านต้องมี 6 ตัวพอดี','auth/too-many-requests':'ลองบ่อยเกินไป รอสักครู่แล้วลองใหม่','auth/operation-not-allowed':'ยังไม่ได้เปิดการสมัครด้วยอีเมล/รหัสผ่านใน Firebase','auth/popup-closed-by-user':'ปิดหน้าต่างก่อนเข้าสู่ระบบสำเร็จ'}[e.code]||('เกิดข้อผิดพลาด: '+(e.code||e.message)));
 
 function showLogin(){
   const phone=h('input',{type:'tel',inputmode:'numeric',autocomplete:'username',placeholder:'0812345678'});
-  const pw=h('input',{type:'password',autocomplete:'current-password'});
+  const pwf=pwField('current-password'),pw=pwf.input;
   const err=h('p',{class:'err'});
   const go=async()=>{
-    if(!okPhone(phone.value)){err.textContent='กรุณากรอกเบอร์โทร 9–10 หลัก';return}
+    if(!okPhone(phone.value)){err.textContent='เบอร์โทรต้องขึ้นต้นด้วย 0 และมี 9–10 หลัก';return}
     try{await signInWithEmailAndPassword(auth,toEmail(phone.value),pw.value)}catch(e){err.textContent=authMsg(e)}
   };
   pw.addEventListener('keydown',e=>{if(e.key==='Enter')go()});
   show(h('div',{style:'padding:24px 0'},h('h1',{},'ประกาศหมู่บ้าน'),h('p',{class:'meta'},'รับข่าวสารจากผู้ใหญ่บ้านและคณะกรรมการ')),
     h('div',{class:'card'},
-      h('label',{},'เบอร์โทร'),phone,h('label',{},'รหัสผ่าน'),pw,
+      h('label',{},'เบอร์โทร'),phone,h('label',{},'รหัสผ่าน'),pwf.row,
       h('button',{onclick:go},'เข้าสู่ระบบ'),err,
       h('p',{class:'meta'},'ยังไม่มีบัญชี?'),
       h('div',{class:'row'},
@@ -111,18 +118,18 @@ function showLogin(){
 function showSignup(){
   const name=h('input',{autocomplete:'name'}),house=h('input',{placeholder:'เช่น 12/3'}),
     phone=h('input',{type:'tel',inputmode:'numeric',autocomplete:'username'}),
-    pw=h('input',{type:'password',autocomplete:'new-password',placeholder:'อย่างน้อย 6 ตัว'}),
-    pw2=h('input',{type:'password',autocomplete:'new-password'});
+    pwf=pwField('new-password','ตัวอักษรหรือตัวเลข 6 ตัว',6),pw=pwf.input,
+    pwf2=pwField('new-password','พิมพ์รหัสผ่านอีกครั้ง',6),pw2=pwf2.input;
   const err=h('p',{class:'err'});
   show(h('div',{class:'bar'},h('h1',{},'สมัครเป็นลูกบ้าน'),h('button',{class:'ghost sm',onclick:showLogin},'‹ กลับ')),
     h('div',{class:'card'},
       h('label',{},'ชื่อ-นามสกุล'),name,h('label',{},'บ้านเลขที่'),house,
       h('label',{},'เบอร์โทร (ใช้เป็นชื่อผู้ใช้)'),phone,
-      h('label',{},'ตั้งรหัสผ่าน'),pw,h('label',{},'ยืนยันรหัสผ่าน'),pw2,
+      h('label',{},'ตั้งรหัสผ่าน (6 ตัวพอดี)'),pwf.row,h('label',{},'ยืนยันรหัสผ่าน'),pwf2.row,
       h('button',{onclick:async()=>{
         if(!name.value.trim()||!house.value.trim()){err.textContent='กรุณากรอกชื่อและบ้านเลขที่';return}
-        if(!okPhone(phone.value)){err.textContent='กรุณากรอกเบอร์โทร 9–10 หลัก';return}
-        if(pw.value.length<6){err.textContent='รหัสผ่านต้องมีอย่างน้อย 6 ตัว';return}
+        if(!okPhone(phone.value)){err.textContent='เบอร์โทรต้องขึ้นต้นด้วย 0 และมี 9–10 หลัก';return}
+        if(pw.value.length!==6){err.textContent='รหัสผ่านต้องมี 6 ตัวพอดี';return}
         if(pw.value!==pw2.value){err.textContent='รหัสผ่านสองช่องไม่ตรงกัน';return}
         signingUp=true;
         try{
