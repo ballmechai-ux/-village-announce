@@ -5,6 +5,13 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="theme-color" content="#17795f" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0e1814" media="(prefers-color-scheme: dark)">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" type="image/png" href="icon-192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="หมู่บ้าน">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
 <title>ประกาศหมู่บ้าน</title>
 <link href="https://fonts.googleapis.com/css2?family=Kanit:wght@400;500;600&family=Sarabun:wght@400;600&display=swap" rel="stylesheet">
 <style>
@@ -100,6 +107,9 @@ input:focus,textarea:focus,select:focus{border-color:var(--pri)}
 .chat-foot,.chat-in{background:var(--card)}
 .badge{background:var(--red)}
 h3{font-weight:500}
+.instbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:8px 16px 0;padding:10px 14px;background:var(--card);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);font-size:15px}
+.instbar span{flex:1;min-width:180px}
+@media(min-width:672px){.instbar{max-width:608px;margin:8px auto 0}}
 </style>
 </head>
 <body>
@@ -133,6 +143,24 @@ const isAdmin=()=>!!RL[profile?.role];
 const isMgr=()=>profile?.role==='admin'||profile?.role==='head';
 const isOwner=()=>profile?.role==='admin';
 const logoutBtn=()=>h('button',{class:'ghost sm',onclick:()=>signOut(auth)},'ออกจากระบบ');
+
+let deferredInstall=null;
+const isStandalone=()=>matchMedia('(display-mode: standalone)').matches||navigator.standalone===true;
+const isIOS=/iphone|ipad|ipod/i.test(navigator.userAgent);
+const instHidden=()=>{try{return !!sessionStorage.getItem('instHide')}catch(_){return false}};
+function installBar(){
+  let bar=document.getElementById('inst');
+  if(isStandalone()||instHidden()||(!deferredInstall&&!isIOS)){bar?.remove();return}
+  if(!bar){bar=h('div',{id:'inst',class:'instbar'});document.body.insertBefore(bar,root)}
+  bar.replaceChildren(
+    h('span',{},deferredInstall?'📲 ติดตั้งแอปไว้บนหน้าจอ เปิดใช้งานง่ายขึ้น':'📲 iPhone: กดปุ่มแชร์ แล้วเลือก “เพิ่มไปยังหน้าจอโฮม”'),
+    deferredInstall?h('button',{class:'sm',onclick:async()=>{deferredInstall.prompt();try{await deferredInstall.userChoice}catch(_){}deferredInstall=null;installBar()}},'ติดตั้ง'):null,
+    h('button',{class:'ghost sm',onclick:()=>{try{sessionStorage.setItem('instHide','1')}catch(_){}bar.remove()}},'ปิด'));
+}
+addEventListener('beforeinstallprompt',e=>{e.preventDefault();deferredInstall=e;installBar()});
+addEventListener('appinstalled',()=>{deferredInstall=null;document.getElementById('inst')?.remove()});
+installBar();
+if('serviceWorker' in navigator)addEventListener('load',()=>navigator.serviceWorker.register('./sw.js').catch(()=>{}));
 
 onAuthStateChanged(auth,async u=>{
   clean();stopRooms();user=u;profile=null;
