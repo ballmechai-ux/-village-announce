@@ -332,26 +332,39 @@ const rid=()=>Math.random().toString(36).slice(2,10)+Date.now().toString(36);
 async function shrinkImage(file){
   try{
     const bmp=await createImageBitmap(file);
-    const sc=Math.min(1,1280/Math.max(bmp.width,bmp.height));
+    const sc=Math.min(1,1600/Math.max(bmp.width,bmp.height));
     const c=document.createElement('canvas');c.width=Math.round(bmp.width*sc);c.height=Math.round(bmp.height*sc);
     c.getContext('2d').drawImage(bmp,0,0,c.width,c.height);
-    return await new Promise(r=>c.toBlob(r,'image/jpeg',0.72));
+    return await new Promise(r=>c.toBlob(r,'image/jpeg',0.78));
   }catch(_){throw new Error('อ่านภาพ '+file.name+' ไม่ได้')}
 }
 async function delFiles(fs){for(const f of fs||[])for(let i=0;i<f.parts;i++)await deleteDoc(doc(db,'blobs',f.id+'_'+i)).catch(()=>{})}
-async function putFiles(list){
-  const out=[];let total=0;
+const MAXN=15,MAXF=15*1048576,MAXT=30*1048576;
+async function putFiles(list,onProg){
+  if(list.length>MAXN)throw new Error('แนบได้ไม่เกิน '+MAXN+' ไฟล์ต่อครั้ง');
+  const prep=[];let total=0;
+  for(const f of list){
+    let blob=f,type=f.type||'application/octet-stream',name=f.name;
+    if(type.startsWith('image/')){blob=await shrinkImage(f);type='image/jpeg';name=name.replace(/\.[^.]+$/,'')+'.jpg'}
+    if(blob.size>MAXF)throw new Error(name+' ใหญ่เกิน 15 MB');
+    total+=blob.size;if(total>MAXT)throw new Error('ไฟล์รวมกันใหญ่เกิน 30 MB');
+    prep.push({blob,type,name});
+  }
+  const out=[];let done=0;
   try{
-    for(const f of list){
-      let blob=f,type=f.type||'application/octet-stream',name=f.name;
-      if(type.startsWith('image/')){blob=await shrinkImage(f);type='image/jpeg';name=name.replace(/\.[^.]+$/,'')+'.jpg'}
-      if(blob.size>2.5*1048576)throw new Error(name+' ใหญ่เกิน 2.5 MB');
-      total+=blob.size;if(total>4*1048576)throw new Error('ไฟล์รวมกันใหญ่เกิน 4 MB');
+    for(let k=0;k<prep.length;k++){
+      const{blob,type,name}=prep[k];
       const buf=new Uint8Array(await blob.arrayBuffer());
-      const id=rid(),SZ=700000,n=Math.max(1,Math.ceil(buf.length/SZ));
-      const meta={id,name,type,size:blob.size,parts:n};
-      out.push(meta);
-      for(let i=0;i<n;i++)await setDoc(doc(db,'blobs',id+'_'+i),{uid:user.uid,i,data:Bytes.fromUint8Array(buf.slice(i*SZ,(i+1)*SZ))});
+      const id=rid(),SZ=900000,n=Math.max(1,Math.ceil(buf.length/SZ));
+      out.push({id,name,type,size:blob.size,parts:n});
+      for(let i=0;i<n;i+=4){
+        await Promise.all(Array.from({length:Math.min(4,n-i)},(_,j)=>{
+          const a=(i+j)*SZ;
+          return setDoc(doc(db,'blobs',id+'_'+(i+j)),{uid:user.uid,i:i+j,data:Bytes.fromUint8Array(buf.slice(a,a+SZ))});
+        }));
+        done+=Math.min(4*SZ,buf.length-i*SZ);
+        if(onProg)onProg('กำลังอัปโหลด ไฟล์ '+(k+1)+'/'+prep.length+' · '+Math.min(99,Math.round(done/Math.max(total,1)*100))+'%');
+      }
     }
     return out;
   }catch(e){await delFiles(out);throw e}
@@ -780,14 +793,14 @@ function composer(){
     btn.disabled=true;err.textContent=fi.files.length?'กำลังอัปโหลดไฟล์…':'';
     let files=[];
     try{
-      files=await putFiles([...fi.files]);
+      files=await putFiles([...fi.files],t=>{err.textContent=t});
       await addDoc(collection(db,'announcements'),{title:t.value.trim(),text:x.value.trim(),level:l.value,type:'text',files,createdBy:user.uid,createdAt:serverTimestamp()});
       t.value='';x.value='';fi.value='';err.textContent='';
     }catch(e){await delFiles(files);err.textContent=e.message}
     btn.disabled=false;
   };
   return h('div',{class:'card'},h('h3',{},'สร้างประกาศ'),t,x,l,
-    h('label',{},'แนบภาพ/เอกสาร (รวมไม่เกิน 4 MB)'),fi,btn,err);
+    h('label',{},'แนบภาพ/เอกสาร (สูงสุด 15 ไฟล์ · ไฟล์ละไม่เกิน 15 MB · รวมไม่เกิน 30 MB)'),fi,btn,err);
 }
 
 function cmpForm(){
@@ -801,14 +814,14 @@ function cmpForm(){
     btn.disabled=true;msg.textContent=fi.files.length?'กำลังอัปโหลดภาพ…':'กำลังส่ง…';
     let files=[];
     try{
-      files=await putFiles([...fi.files]);
+      files=await putFiles([...fi.files],t=>{msg.textContent=t});
       const r=await addDoc(collection(db,'complaints'),{uid:user.uid,name:profile.name,house:profile.house,phone:profile.phone||'',cat:cat.value,title:t.value.trim(),text:x.value.trim(),files,status:'new',createdAt:serverTimestamp()});
       csSet(r.id,'new');t.value='';x.value='';fi.value='';
       msg.textContent='✅ ส่งเรื่องแล้ว ผู้ดูแลจะรับเรื่องและแจ้งผลที่นี่';
     }catch(e){await delFiles(files);msg.textContent='ส่งไม่สำเร็จ: '+e.message}
     btn.disabled=false;
   };
-  return h('div',{class:'card'},h('h3',{},'แจ้งปัญหา'),h('label',{},'หัวข้อที่แจ้ง'),cat,t,x,h('label',{},'แนบภาพ (ถ้ามี)'),fi,btn,msg);
+  return h('div',{class:'card'},h('h3',{},'แจ้งปัญหา'),h('label',{},'หัวข้อที่แจ้ง'),cat,t,x,h('label',{},'แนบภาพ (ถ้ามี · สูงสุด 15 รูป)'),fi,btn,msg);
 }
 
 function catEditor(){
