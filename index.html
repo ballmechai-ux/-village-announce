@@ -163,7 +163,7 @@ installBar();
 if('serviceWorker' in navigator)addEventListener('load',()=>navigator.serviceWorker.register('./sw.js').catch(()=>{}));
 
 onAuthStateChanged(auth,async u=>{
-  clean();stopRooms();user=u;profile=null;
+  clean();stopRooms();membersUnlock=0;user=u;profile=null;
   if(signingUp)return;
   if(!u)return showLogin();
   try{
@@ -483,7 +483,7 @@ function liveAdminCard(){
     const ps=[...liveRoom.remoteParticipants.values()];
     livePeak=Math.max(livePeak,ps.length);
     lc.textContent='👂 ผู้ฟังตอนนี้ '+ps.length+' คน (สูงสุด '+livePeak+')';
-    ln.textContent=ps.map(x=>x.name||x.identity).join(', ');
+    ln.textContent=isOwner()?ps.map(x=>x.name||x.identity).join(', '):'';
   };
   const iv=setInterval(paintCount,1500);
   unsubs.push(()=>clearInterval(iv));
@@ -634,7 +634,7 @@ function settingsCard(){
     h('label',{},'รหัสหมู่บ้าน (บอกลูกบ้านเอง)'),code,
     h('button',{class:'sm',onclick:async()=>{
       if(on.checked&&!code.value.trim()){msg.textContent='กรุณาตั้งรหัสหมู่บ้านก่อน';return}
-      try{await setDoc(doc(db,'settings','app'),{autoApprove:on.checked,joinCode:code.value.trim()});msg.textContent='บันทึกแล้ว'}
+      try{await setDoc(doc(db,'settings','app'),{autoApprove:on.checked,joinCode:code.value.trim()},{merge:true});msg.textContent='บันทึกแล้ว'}
       catch(e){msg.textContent='บันทึกไม่สำเร็จ: '+e.message}
     }},'บันทึก'),msg);
 }
@@ -716,12 +716,13 @@ const ST={new:'รอรับเรื่อง',accepted:'กำลังด�
 async function loadCats(){try{const x=await getDoc(doc(db,'config','cats'));if(x.exists()&&x.data().list&&x.data().list.length)cats=x.data().list}catch(_){}}
 
 function showMain(tab='news'){
+  if(tab!=='members')membersUnlock=0;
   const subs=unsubs.slice(0,1);unsubs.forEach((u,i)=>{if(i>0)u()});unsubs=subs;
   const body=h('div');
   const nb=h('span',{class:'badge',style:'display:none'}),cb=h('span',{class:'badge',style:'display:none'});
   const tb=(k,label,bd)=>h('button',{class:tab===k?'':'ghost',onclick:()=>showMain(k)},label,bd);
   show(h('div',{class:'bar hero'},h('div',{},h('h1',{},'🏡 ประกาศหมู่บ้าน'),h('div',{class:'who'},profile.name+' · บ้าน '+profile.house+(RL[profile.role]?' · '+RL[profile.role]:''))),logoutBtn()),
-    h('div',{class:'tabs'},tb('news','ประกาศ',nb),tb('cmp','แจ้งปัญหา',cb),isMgr()?tb('members','สมาชิก'):null),body);
+    h('div',{class:'tabs'},tb('news','ประกาศ',nb),tb('cmp','แจ้งปัญหา',cb),isOwner()?tb('members','สมาชิก'):null),body);
   const setB=(el,n)=>{el.textContent=n>99?'99+':String(n);el.style.display=n?'':'none'};
   let anns=[],cmps=[],paintTab=()=>{};
   const paintBadges=()=>{
@@ -740,7 +741,7 @@ function showMain(tab='news'){
     cmps=snap.docs;paintBadges();if(tab==='cmp')paintTab();
   },()=>{}));
 
-  if(tab==='members'&&isMgr())return renderMembers(body);
+  if(tab==='members'&&isOwner())return Date.now()<membersUnlock?renderMembers(body):lockScreen(body);
   if(tab==='news'){
     const list=h('div');
     body.append(isAdmin()?liveAdminCard():liveListenCard());
@@ -861,7 +862,7 @@ function complaintCard(d,inDetail){
   return h('div',{class:'card'},
     h('span',{class:'chip '+c.status},ST[c.status]||c.status),h('span',{class:'tag',style:'margin-left:6px'},c.cat),
     h('h3',{style:'margin-top:6px'},c.title),h('div',{},c.text),fileView(c.files),
-    h('div',{class:'meta'},'แจ้งโดย '+c.name+' · บ้าน '+c.house+(isAdmin()&&c.phone?' · โทร '+c.phone:'')+' · '+when(c.createdAt)),
+    h('div',{class:'meta'},'แจ้งโดย '+c.name+' · บ้าน '+c.house+(isOwner()&&c.phone?' · โทร '+c.phone:'')+' · '+when(c.createdAt)),
     c.acceptedByName?h('div',{class:'meta'},'✋ รับเรื่องโดย '+c.acceptedByName+' · '+when(c.acceptedAt)):null,
     c.status==='done'?h('div',{class:'card',style:'margin:8px 0 0;border-color:var(--ok)'},h('b',{},'ผลการดำเนินการ'),h('div',{},c.result||''),h('div',{class:'meta'},'โดย '+(c.doneByName||'')+' · '+when(c.doneAt))):null,
     rep,sendRep,msg,
@@ -879,6 +880,55 @@ function showComplaint(id){
   show(h('div',{class:'bar'},h('button',{class:'ghost sm',onclick:()=>showMain('cmp')},'‹ กลับ'),logoutBtn()),
     holder,h('h3',{style:'margin:14px 0 8px'},'พูดคุยเรื่องนี้'),cbx.el);
   root.classList.add('hasfix');
+}
+
+let membersUnlock=0,pinFails=0,pinLockUntil=0;
+const sha=async t=>[...new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(t)))].map(b=>b.toString(16).padStart(2,'0')).join('');
+async function savePin(pin){
+  const salt=rid();
+  await setDoc(doc(db,'settings','app'),{pinSalt:salt,pinHash:await sha(salt+':'+pin)},{merge:true});
+}
+function pinCard(){
+  const a=h('input',{type:'password',inputmode:'numeric',maxlength:'8',autocomplete:'off',placeholder:'รหัสใหม่ 4–8 หลัก'});
+  const b=h('input',{type:'password',inputmode:'numeric',maxlength:'8',autocomplete:'off',placeholder:'พิมพ์รหัสใหม่อีกครั้ง'});
+  const msg=h('p',{class:'meta'});
+  return h('details',{class:'card'},h('summary',{},'เปลี่ยนรหัสเปิดดูข้อมูลสมาชิก'),a,b,
+    h('button',{class:'sm',onclick:async()=>{
+      if(!/^\d{4,8}$/.test(a.value)){msg.textContent='รหัสต้องเป็นตัวเลข 4–8 หลัก';return}
+      if(a.value!==b.value){msg.textContent='รหัสสองช่องไม่ตรงกัน';return}
+      try{await savePin(a.value);a.value=b.value='';msg.textContent='เปลี่ยนรหัสแล้ว'}catch(e){msg.textContent=e.message}
+    }},'บันทึกรหัสใหม่'),msg);
+}
+async function lockScreen(body){
+  body.append(h('p',{class:'meta'},'กำลังโหลด…'));
+  let c={};
+  try{const x=await getDoc(doc(db,'settings','app'));c=x.exists()?x.data():{}}
+  catch(e){body.replaceChildren(h('p',{class:'err'},e.message));return}
+  const pin=h('input',{type:'password',inputmode:'numeric',maxlength:'8',autocomplete:'off',placeholder:'รหัส 4–8 หลัก'});
+  const msg=h('p',{class:'err'});
+  if(!c.pinHash){
+    const pin2=h('input',{type:'password',inputmode:'numeric',maxlength:'8',autocomplete:'off',placeholder:'พิมพ์รหัสอีกครั้ง'});
+    body.replaceChildren(h('div',{class:'card center'},h('div',{style:'font-size:42px'},'🔐'),
+      h('h3',{},'ตั้งรหัสเปิดดูข้อมูลสมาชิก'),
+      h('p',{class:'meta'},'ยังไม่มีรหัส ตั้งตัวเลข 4–8 หลัก แล้วบอกเฉพาะผู้มีสิทธิ์'),pin,pin2,
+      h('button',{onclick:async()=>{
+        if(!/^\d{4,8}$/.test(pin.value)){msg.textContent='รหัสต้องเป็นตัวเลข 4–8 หลัก';return}
+        if(pin.value!==pin2.value){msg.textContent='รหัสสองช่องไม่ตรงกัน';return}
+        try{await savePin(pin.value);membersUnlock=Date.now()+5*60000;showMain('members')}catch(e){msg.textContent=e.message}
+      }},'ตั้งรหัสและปลดล็อก'),msg));
+    return;
+  }
+  const go=async()=>{
+    if(Date.now()<pinLockUntil){msg.textContent='ใส่ผิดหลายครั้ง รออีก '+Math.ceil((pinLockUntil-Date.now())/1000)+' วินาที';return}
+    if(await sha(c.pinSalt+':'+pin.value)===c.pinHash){pinFails=0;membersUnlock=Date.now()+5*60000;showMain('members');return}
+    pin.value='';pinFails++;
+    if(pinFails>=5){pinFails=0;pinLockUntil=Date.now()+60000;msg.textContent='ใส่ผิด 5 ครั้ง ล็อก 1 นาที'}
+    else msg.textContent='รหัสไม่ถูกต้อง';
+  };
+  pin.addEventListener('keydown',e=>{if(e.key==='Enter')go()});
+  body.replaceChildren(h('div',{class:'card center'},h('div',{style:'font-size:42px'},'🔒'),
+    h('h3',{},'ข้อมูลสมาชิกถูกซ่อนไว้'),
+    h('p',{class:'meta'},'ใส่รหัสของผู้มีสิทธิ์เพื่อดู'),pin,h('button',{onclick:go},'ปลดล็อก'),msg));
 }
 
 function memberCard(d){
@@ -921,7 +971,16 @@ function memberCard(d){
 
 function renderMembers(body){
   const pend=h('div'),mem=h('div'),q=h('input',{placeholder:'ค้นหาชื่อ / บ้านเลขที่ / เบอร์'});
-  body.append(settingsCard(),
+  const left=h('span',{class:'meta'});
+  const bar=h('div',{class:'row',style:'align-items:center;justify-content:space-between;margin-bottom:10px'},left,
+    h('button',{class:'ghost sm',onclick:()=>{membersUnlock=0;showMain('members')}},'🔒 ซ่อนข้อมูล'));
+  const tick=()=>{
+    const t=membersUnlock-Date.now();
+    if(t<=0){showMain('members');return}
+    left.textContent='🔓 ปลดล็อกอยู่ · ล็อกอัตโนมัติใน '+Math.floor(t/60000)+':'+String(Math.floor(t/1000)%60).padStart(2,'0');
+  };
+  tick();const iv=setInterval(tick,1000);unsubs.push(()=>clearInterval(iv));
+  body.append(bar,...(isOwner()?[pinCard()]:[]),settingsCard(),
     h('h3',{style:'margin:14px 0 8px'},'รออนุมัติ / ถูกระงับ'),pend,
     h('h3',{style:'margin:14px 0 8px'},'สมาชิกทั้งหมด'),q,mem);
   let all=[];
