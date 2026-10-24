@@ -71,7 +71,7 @@ const isAdmin=()=>profile?.role==='admin';
 const logoutBtn=()=>h('button',{class:'ghost sm',onclick:()=>signOut(auth)},'ออกจากระบบ');
 
 onAuthStateChanged(auth,async u=>{
-  clean();user=u;profile=null;
+  clean();stopRooms();user=u;profile=null;
   if(signingUp)return;
   if(!u)return showLogin();
   try{
@@ -113,6 +113,144 @@ function showLogin(){
       h('div',{class:'row'},
         h('button',{class:'ghost',onclick:showSignup},'สมัครใหม่'),
         h('button',{class:'ghost',onclick:async()=>{try{await signInWithPopup(auth,new GoogleAuthProvider())}catch(e){err.textContent=authMsg(e)}}},'ใช้ Google'))));
+}
+
+const TOKEN_URL='https://village-token.ballmechai.workers.dev';
+const LK_SRC='https://cdn.jsdelivr.net/npm/livekit-client@2.5.0/dist/livekit-client.umd.min.js';
+let liveRoom=null,listenRoom=null,rxRoom=null,receiverOn=false,rxWant=false,rxBusy=false,wl=null;
+
+const loadLK=()=>window.LivekitClient?Promise.resolve(window.LivekitClient):new Promise((ok,no)=>{
+  const t=document.createElement('script');t.src=LK_SRC;
+  t.onload=()=>ok(window.LivekitClient);t.onerror=()=>no(new Error('โหลดตัวเชื่อมเสียงไม่สำเร็จ ตรวจอินเทอร์เน็ต'));
+  document.head.append(t);
+});
+async function getToken(mode){
+  const idt=await user.getIdToken();
+  const r=await fetch(TOKEN_URL,{method:'POST',headers:{Authorization:'Bearer '+idt,'Content-Type':'application/json'},body:JSON.stringify({mode})});
+  const j=await r.json().catch(()=>({}));
+  if(!r.ok)throw new Error(j.error==='admin only'?'ใช้ได้เฉพาะแอดมิน':j.error==='not approved'?'ยังไม่ได้รับอนุมัติ':'ขอสิทธิ์เสียงไม่สำเร็จ ('+(j.error||r.status)+')');
+  return j;
+}
+const liveOn=d=>!!d&&d.active===true&&(!d.startedAt?.toDate||Date.now()-d.startedAt.toDate().getTime()<3*3600*1000);
+const offLive=()=>setDoc(doc(db,'live','current'),{active:false,endedAt:serverTimestamp()});
+function stopRooms(){
+  receiverOn=false;rxWant=false;
+  [liveRoom,listenRoom,rxRoom].forEach(r=>{try{r?.disconnect()}catch(_){}});
+  liveRoom=listenRoom=rxRoom=null;
+}
+async function listenConnect(){
+  const[LK,t]=await Promise.all([loadLK(),getToken('listen')]);
+  const room=new LK.Room();
+  room.on(LK.RoomEvent.TrackSubscribed,tr=>{if(tr.kind==='audio'){const el=tr.attach();el.style.display='none';document.body.append(el)}});
+  room.on(LK.RoomEvent.TrackUnsubscribed,tr=>{tr.detach().forEach(e=>e.remove())});
+  await room.connect(t.url,t.token);
+  try{await room.startAudio()}catch(_){}
+  return room;
+}
+async function stopLive(){
+  const r=liveRoom;liveRoom=null;
+  try{await offLive()}catch(_){}
+  try{await r?.disconnect()}catch(_){}
+}
+
+function liveAdminCard(){
+  const title=h('input',{placeholder:'หัวข้อประกาศสด (ไม่บังคับ)'});
+  const st=h('p',{class:'meta'},liveRoom?'🔴 ออกอากาศอยู่':'');
+  const btn=h('button',{});
+  const clear=h('button',{class:'ghost sm',style:'display:none',onclick:()=>offLive()},'ล้างสถานะสดที่ค้างอยู่');
+  const paint=()=>{const on=!!liveRoom;btn.textContent=on?'■ จบการประกาศสด':'● เริ่มประกาศสด';btn.className=on?'danger':'';title.disabled=on};
+  unsubs.push(onSnapshot(doc(db,'live','current'),x=>{clear.style.display=(liveOn(x.data())&&!liveRoom)?'':'none'}));
+  btn.onclick=async()=>{
+    btn.disabled=true;
+    try{
+      if(liveRoom){await stopLive();st.textContent='จบการประกาศแล้ว'}
+      else{
+        st.textContent='กำลังเปิดไมค์ (อนุญาตไมโครโฟนเมื่อเบราว์เซอร์ถาม)…';
+        const[LK,t]=await Promise.all([loadLK(),getToken('speak')]);
+        const room=new LK.Room({audioCaptureDefaults:{echoCancellation:true,noiseSuppression:true,autoGainControl:true}});
+        await room.connect(t.url,t.token);
+        await room.localParticipant.setMicrophoneEnabled(true);
+        liveRoom=room;
+        room.on(LK.RoomEvent.Disconnected,()=>{if(liveRoom===room){liveRoom=null;offLive().catch(()=>{});st.textContent='การเชื่อมต่อหลุด ประกาศสดสิ้นสุด';paint()}});
+        const ttl=title.value.trim()||'ประกาศสด';
+        const a=await addDoc(collection(db,'announcements'),{title:ttl,text:'',level:'normal',type:'live',createdBy:user.uid,createdAt:serverTimestamp()});
+        await setDoc(doc(db,'live','current'),{active:true,title:ttl,announcementId:a.id,startedBy:user.uid,startedAt:serverTimestamp()});
+        st.textContent='กำลังเชื่อมตู้ลำโพง… รอ 3 วินาที แล้วพูดได้เลย';
+        setTimeout(()=>{if(liveRoom===room)st.textContent='🔴 ออกอากาศอยู่ พูดได้เลย'},3000);
+      }
+    }catch(e){st.textContent=(e.name==='NotAllowedError'?'ไม่ได้อนุญาตไมโครโฟน':e.message)||String(e);await stopLive()}
+    finally{btn.disabled=false;paint()}
+  };
+  paint();
+  return h('div',{class:'card'},h('h3',{},'ประกาศสด'),title,btn,st,clear,
+    h('p',{class:'meta'},'ถือมือถือห่างจากลำโพงตู้ หรือใช้หูฟัง เพื่อกันเสียงหอน'),
+    h('button',{class:'ghost sm',onclick:showReceiver},'โหมดตัวรับ (ตู้ลำโพง)'));
+}
+
+function liveListenCard(){
+  const st=h('p',{},'ตอนนี้ไม่มีประกาศสด'),btn=h('button',{style:'display:none'});
+  const box=h('div',{class:'card'},h('h3',{},'ประกาศสด'),st,btn,
+    h('button',{class:'ghost sm',style:'margin-top:10px',onclick:showReceiver},'โหมดตัวรับ (ตู้ลำโพง)'));
+  let cur=null;
+  const stopListen=()=>{const r=listenRoom;listenRoom=null;try{r?.disconnect()}catch(_){}};
+  const paint=()=>{
+    const on=liveOn(cur);
+    if(!on&&listenRoom)stopListen();
+    box.style.border=on?'2px solid var(--red)':'';
+    st.textContent=on?'🔴 กำลังประกาศสด: '+(cur.title||''):'ตอนนี้ไม่มีประกาศสด';
+    btn.style.display=on?'':'none';
+    btn.textContent=listenRoom?'หยุดฟัง':'🔊 ฟังสด';
+  };
+  btn.onclick=async()=>{
+    btn.disabled=true;
+    try{
+      if(listenRoom)stopListen();
+      else{
+        const r=await listenConnect();listenRoom=r;
+        r.on(window.LivekitClient.RoomEvent.Disconnected,()=>{if(listenRoom===r){listenRoom=null;paint()}});
+      }
+    }catch(e){st.textContent=e.message}
+    finally{btn.disabled=false;paint()}
+  };
+  unsubs.push(onSnapshot(doc(db,'live','current'),x=>{cur=x.data();paint()},()=>{}));
+  return box;
+}
+
+async function keepAwake(){try{wl=await navigator.wakeLock?.request('screen')}catch(_){}}
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&receiverOn)keepAwake()});
+
+async function rxSync(st){
+  if(!receiverOn)return;
+  if(rxWant&&!rxRoom&&!rxBusy){
+    rxBusy=true;st.textContent='กำลังเชื่อมต่อเสียงประกาศ…';
+    try{
+      const r=await listenConnect();
+      if(!receiverOn||!rxWant){r.disconnect();return}
+      rxRoom=r;
+      r.on(window.LivekitClient.RoomEvent.Disconnected,()=>{
+        if(rxRoom===r){rxRoom=null;if(receiverOn&&rxWant){st.textContent='ขาดการเชื่อมต่อ กำลังลองใหม่…';setTimeout(()=>rxSync(st),2000)}}
+      });
+      st.textContent='🔴 กำลังรับเสียงประกาศสด';
+    }catch(e){st.textContent='เชื่อมต่อไม่สำเร็จ: '+e.message+' (ลองใหม่อัตโนมัติ)';setTimeout(()=>rxSync(st),4000)}
+    finally{rxBusy=false}
+  }else if(!rxWant&&rxRoom){
+    const r=rxRoom;rxRoom=null;try{await r.disconnect()}catch(_){}
+    st.textContent='พร้อมรับเสียง — รอประกาศสด';
+  }
+}
+function showReceiver(){
+  const subs=unsubs.slice(0,1);unsubs.forEach((u,i)=>{if(i>0)u()});unsubs=subs;
+  const st=h('p',{style:'font:500 22px Kanit,sans-serif'},'แตะ “เริ่มทำงาน” เพื่อเปิดรับเสียง');
+  const go=h('button',{style:'font-size:22px;padding:18px 30px'},'เริ่มทำงาน');
+  show(h('div',{class:'bar'},h('h1',{},'โหมดตัวรับ'),
+      h('button',{class:'ghost sm',onclick:()=>{stopRooms();history.replaceState(null,'',location.pathname);showMain()}},'‹ ออก')),
+    h('div',{class:'card center'},st,go,
+      h('p',{class:'meta'},'ต่อสาย AUX จากมือถือเครื่องนี้เข้าแอมป์ เปิดเสียงเครื่องให้ดังพอ แล้วเปิดหน้านี้ค้างไว้')));
+  go.onclick=()=>{
+    go.remove();receiverOn=true;keepAwake();
+    st.textContent='พร้อมรับเสียง — รอประกาศสด';
+    unsubs.push(onSnapshot(doc(db,'live','current'),x=>{rxWant=liveOn(x.data());rxSync(st)},e=>{st.textContent='อ่านสถานะไม่ได้: '+e.message}));
+  };
 }
 
 async function createProfile(uid,base,code){
@@ -199,7 +337,7 @@ function watchProfile(){
     if(!s.exists())return showRegister();
     profile=s.data();
     if(!profile.approved)return showPending();
-    if(!root.dataset.main){root.dataset.main='1';showMain()}
+    if(!root.dataset.main){root.dataset.main='1';location.hash==='#receiver'?showReceiver():showMain()}
   },showError));
 }
 
@@ -218,14 +356,14 @@ function showMain(tab='news'){
   show(h('div',{class:'bar'},h('div',{},h('h1',{},'ประกาศหมู่บ้าน'),h('div',{class:'who'},profile.name+' · บ้าน '+profile.house)),logoutBtn()),
     tabs,body);
   if(tab==='members')return renderMembers(body);
-  body.append(h('div',{class:'card live'},h('b',{},'ประกาศสด'),h('div',{class:'meta'},'ยังไม่เปิดใช้งาน จะเพิ่มในขั้นต่อไป')));
+  body.append(isAdmin()?liveAdminCard():liveListenCard());
   if(isAdmin())body.append(composer());
   body.append(list);
   unsubs.push(onSnapshot(query(collection(db,'announcements'),orderBy('createdAt','desc'),limit(30)),snap=>{
     if(snap.empty){list.replaceChildren(h('p',{class:'center meta'},'ยังไม่มีประกาศ'));return}
     list.replaceChildren(...snap.docs.map(d=>{const a=d.data();
       return h('div',{class:'card item '+a.level,onclick:()=>showThread(d.id,a)},
-        h('span',{class:'tag '+a.level},LV[a.level]||'ทั่วไป'),h('h3',{},a.title),
+        h('span',{class:'tag '+a.level},LV[a.level]||'ทั่วไป'),a.type==='live'?h('span',{class:'tag'},'สด'):null,h('h3',{},a.title),
         h('div',{},a.text),h('div',{class:'meta'},when(a.createdAt)+' · แตะเพื่อถามหรือตอบ'))}));
   },showError));
 }
@@ -269,7 +407,7 @@ function showThread(id,a){
   };
   inp.addEventListener('keydown',e=>{if(e.key==='Enter')send()});
   show(h('div',{class:'bar'},h('button',{class:'ghost sm',onclick:()=>showMain()},'‹ กลับ'),logoutBtn()),
-    h('div',{class:'card item '+a.level},h('span',{class:'tag '+a.level},LV[a.level]||'ทั่วไป'),h('h3',{},a.title),h('div',{},a.text),h('div',{class:'meta'},when(a.createdAt))),
+    h('div',{class:'card item '+a.level},h('span',{class:'tag '+a.level},LV[a.level]||'ทั่วไป'),a.type==='live'?h('span',{class:'tag'},'สด'):null,h('h3',{},a.title),h('div',{},a.text),h('div',{class:'meta'},when(a.createdAt))),
     h('div',{class:'card'},h('h3',{},'ถาม-ตอบ'),msgs,h('div',{class:'row',style:'margin-top:12px'},inp,h('button',{onclick:send},'ส่ง')),err));
   unsubs.push(onSnapshot(query(collection(db,'announcements',id,'messages'),orderBy('createdAt','asc'),limit(200)),snap=>{
     if(snap.empty){msgs.replaceChildren(h('p',{class:'meta'},'ยังไม่มีคำถาม'));return}
