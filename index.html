@@ -95,7 +95,10 @@ const h=(t,a={},...k)=>{const e=document.createElement(t);
 const show=(...n)=>{root.replaceChildren(...n)};
 const clean=()=>{unsubs.forEach(u=>u());unsubs=[]};
 const when=t=>{const d=t?.toDate?.();return d?d.toLocaleString('th-TH',{dateStyle:'medium',timeStyle:'short'}):'กำลังส่ง…'};
-const isAdmin=()=>profile?.role==='admin';
+const RL={admin:'แอดมิน',head:'ผู้ใหญ่บ้าน',staff:'ผู้ช่วย'};
+const isAdmin=()=>!!RL[profile?.role];
+const isMgr=()=>profile?.role==='admin'||profile?.role==='head';
+const isOwner=()=>profile?.role==='admin';
 const logoutBtn=()=>h('button',{class:'ghost sm',onclick:()=>signOut(auth)},'ออกจากระบบ');
 
 onAuthStateChanged(auth,async u=>{
@@ -145,7 +148,7 @@ function showLogin(){
 
 const TOKEN_URL='https://village-token.ballmechai.workers.dev';
 const LK_SRC='https://cdn.jsdelivr.net/npm/livekit-client@2.5.0/dist/livekit-client.umd.min.js';
-let rec=null,recChunks=[],recT0=0,recEndAt=0,recMime='',recCap=null,pendingRec=null,liveAnnId=null,curLiveId=null,liveRoom=null,listenRoom=null,rxRoom=null,receiverOn=false,rxWant=false,rxBusy=false,wl=null;
+let livePeak=0,rec=null,recChunks=[],recT0=0,recEndAt=0,recMime='',recCap=null,pendingRec=null,liveAnnId=null,curLiveId=null,liveRoom=null,listenRoom=null,rxRoom=null,receiverOn=false,rxWant=false,rxBusy=false,wl=null;
 
 const loadLK=()=>window.LivekitClient?Promise.resolve(window.LivekitClient):new Promise((ok,no)=>{
   const t=document.createElement('script');t.src=LK_SRC;
@@ -363,10 +366,10 @@ function chatBox(path,o={}){
     el.classList.add('flash');setTimeout(()=>el.classList.remove('flash'),1600);
   };
   const bubble=(d,replies)=>{
-    const m=d.data(),me=m.uid===user.uid,adm=m.role==='admin'||(!!o.host&&m.uid===o.host);
+    const m=d.data(),me=m.uid===user.uid,adm=!!RL[m.role]||(!!o.host&&m.uid===o.host);
     const n=replies.get(d.id)||0;
     return h('div',{class:'bub'+(me?' me':'')+(adm?' adm':''),'data-id':d.id},
-      me?null:h('div',{class:'who',style:'--h:'+hue(m.uid)},m.name+' · บ้าน '+m.house,m.role==='admin'?h('span',{class:'badge gray'},'ผู้ดูแล'):null),
+      me?null:h('div',{class:'who',style:'--h:'+hue(m.uid)},m.name+' · บ้าน '+m.house,RL[m.role]?h('span',{class:'badge gray'},RL[m.role]):null),
       m.replyTo?h('div',{class:'quote',onclick:()=>jump(m.replyTo.id)},'↩ '+m.replyTo.name+' (บ้าน '+m.replyTo.house+'): '+m.replyTo.text):null,
       h('div',{class:'txt'},m.text),
       h('div',{class:'t'},n?h('span',{class:'rcount'},'💬 '+n+' ตอบ'):null,hhmm(m.createdAt),
@@ -400,6 +403,16 @@ function liveAdminCard(){
   const title=h('input',{placeholder:'หัวข้อประกาศสด (ไม่บังคับ)'});
   const st=h('p',{class:'meta'},liveRoom?'🔴 ออกอากาศอยู่':'');
   const btn=h('button',{});
+  const lc=h('div',{style:'margin:6px 0;font:500 18px Kanit,sans-serif'}),ln=h('div',{class:'meta'});
+  const paintCount=()=>{
+    if(!liveRoom){lc.textContent='';ln.textContent='';return}
+    const ps=[...liveRoom.remoteParticipants.values()];
+    livePeak=Math.max(livePeak,ps.length);
+    lc.textContent='👂 ผู้ฟังตอนนี้ '+ps.length+' คน (สูงสุด '+livePeak+')';
+    ln.textContent=ps.map(x=>x.name||x.identity).join(', ');
+  };
+  const iv=setInterval(paintCount,1500);
+  unsubs.push(()=>clearInterval(iv));
   let lastLive=null;
   const clear=h('button',{class:'ghost sm',style:'display:none',onclick:async()=>{await offLive();cleanupLive(lastLive?.announcementId)}},'ล้างสถานะสดที่ค้างอยู่');
   const hold=h('div'),cs={id:null,off:null},saveBox=h('div');
@@ -433,9 +446,9 @@ function liveAdminCard(){
     btn.disabled=true;
     try{
       if(liveRoom){
-        const rc=await stopRec();await stopLive();
-        if(rc){pendingRec=rc;renderSave();st.textContent='จบการประกาศแล้ว เลือกเก็บเสียงด้านล่าง (แชทสดถูกลบแล้ว)'}
-        else st.textContent='จบการประกาศแล้ว (ลบแชทสดทิ้งแล้ว)';
+        const pk=livePeak,rc=await stopRec();await stopLive();paintCount();
+        if(rc){pendingRec=rc;renderSave();st.textContent='จบการประกาศแล้ว · ผู้ฟังสูงสุด '+pk+' คน · เลือกเก็บเสียงด้านล่าง'}
+        else st.textContent='จบการประกาศแล้ว · ผู้ฟังสูงสุด '+pk+' คน';
       }
       else{
         st.textContent='กำลังเปิดไมค์ (อนุญาตไมโครโฟนเมื่อเบราว์เซอร์ถาม)…';
@@ -443,7 +456,7 @@ function liveAdminCard(){
         const room=new LK.Room({audioCaptureDefaults:{echoCancellation:true,noiseSuppression:true,autoGainControl:true}});
         await room.connect(t.url,t.token);
         await room.localParticipant.setMicrophoneEnabled(true);
-        liveRoom=room;startRec(room,LK);
+        liveRoom=room;livePeak=0;startRec(room,LK);paintCount();
         room.on(LK.RoomEvent.Disconnected,()=>{if(liveRoom===room){const id=liveAnnId;liveRoom=null;liveAnnId=null;offLive().catch(()=>{});cleanupLive(id);stopRec().then(rc=>{if(rc){pendingRec=rc;renderSave()}});st.textContent='การเชื่อมต่อหลุด ประกาศสดสิ้นสุด';paint()}});
         const ttl=title.value.trim()||'ประกาศสด';
         const a=await addDoc(collection(db,'announcements'),{title:ttl,text:'',level:'normal',type:'live',createdBy:user.uid,createdAt:serverTimestamp()});
@@ -456,7 +469,7 @@ function liveAdminCard(){
     finally{btn.disabled=false;paint()}
   };
   paint();renderSave();
-  return h('div',{class:'card'},h('h3',{},'ประกาศสด'),title,btn,st,clear,
+  return h('div',{class:'card'},h('h3',{},'ประกาศสด'),title,btn,st,lc,ln,clear,
     h('p',{class:'meta'},'ถือมือถือห่างจากลำโพงตู้ หรือใช้หูฟัง เพื่อกันเสียงหอน'),
     h('button',{class:'ghost sm',onclick:showReceiver},'โหมดตัวรับ (ตู้ลำโพง)'),saveBox,hold);
 }
@@ -634,7 +647,7 @@ function showMain(tab='news'){
   const nb=h('span',{class:'badge',style:'display:none'}),cb=h('span',{class:'badge',style:'display:none'});
   const tb=(k,label,bd)=>h('button',{class:tab===k?'':'ghost',onclick:()=>showMain(k)},label,bd);
   show(h('div',{class:'bar'},h('div',{},h('h1',{},'ประกาศหมู่บ้าน'),h('div',{class:'who'},profile.name+' · บ้าน '+profile.house)),logoutBtn()),
-    h('div',{class:'tabs'},tb('news','ประกาศ',nb),tb('cmp','แจ้งปัญหา',cb),isAdmin()?tb('members','สมาชิก'):null),body);
+    h('div',{class:'tabs'},tb('news','ประกาศ',nb),tb('cmp','แจ้งปัญหา',cb),isMgr()?tb('members','สมาชิก'):null),body);
   const setB=(el,n)=>{el.textContent=n>99?'99+':String(n);el.style.display=n?'':'none'};
   let anns=[],cmps=[],paintTab=()=>{};
   const paintBadges=()=>{
@@ -653,7 +666,7 @@ function showMain(tab='news'){
     cmps=snap.docs;paintBadges();if(tab==='cmp')paintTab();
   },()=>{}));
 
-  if(tab==='members')return renderMembers(body);
+  if(tab==='members'&&isMgr())return renderMembers(body);
   if(tab==='news'){
     const list=h('div');
     body.append(isAdmin()?liveAdminCard():liveListenCard());
@@ -665,7 +678,7 @@ function showMain(tab='news'){
   body.append(h('p',{class:'meta'},'กำลังโหลด…'));
   loadCats().then(()=>{
     const listC=h('div'),fbar=h('div',{class:'row',style:'flex-wrap:wrap;margin-bottom:12px'});let flt='all';
-    body.replaceChildren(...(isAdmin()?[catEditor(),fbar]:[cmpForm(),h('h3',{style:'margin:14px 0 8px'},'เรื่องของฉัน')]),listC);
+    body.replaceChildren(...(isAdmin()?[...(isMgr()?[catEditor()]:[]),fbar]:[cmpForm(),h('h3',{style:'margin:14px 0 8px'},'เรื่องของฉัน')]),listC);
     paintTab=()=>{
       let arr=cmps.slice();
       if(isAdmin()){
@@ -795,31 +808,40 @@ function showComplaint(id){
 
 function memberCard(d){
   const u=d.data(),self=d.id===user.uid,ref=doc(db,'users',d.id);
+  const locked=u.role==='admin'&&!isOwner();
   const name=h('input',{value:u.name||''}),house=h('input',{value:u.house||''}),phone=h('input',{type:'tel',value:u.phone||''});
-  const role=h('select',{},h('option',{value:'resident'},'ลูกบ้าน'),h('option',{value:'admin'},'ผู้ดูแล'));
-  role.value=u.role||'resident';role.disabled=self;
+  const role=h('select',{},...[['resident','ลูกบ้าน'],['staff','ผู้ช่วย'],['head','ผู้ใหญ่บ้าน'],['admin','แอดมิน']].map(([v,l])=>h('option',{value:v},l)));
+  role.value=u.role||'resident';role.disabled=self||!isOwner();
   const msg=h('p',{class:'err'});
   const save=async()=>{
     if(!name.value.trim()||!house.value.trim()){msg.textContent='กรุณากรอกชื่อและบ้านเลขที่';return}
-    if(role.value==='admin'&&u.role!=='admin'&&!confirm('ตั้ง '+name.value.trim()+' เป็นผู้ดูแล? จะลบประกาศและจัดการสมาชิกได้'))return;
-    try{await updateDoc(ref,{name:name.value.trim(),house:house.value.trim(),phone:phone.value.trim(),role:role.value});msg.textContent='';form.style.display='none'}
+    const pl={name:name.value.trim(),house:house.value.trim(),phone:phone.value.trim()};
+    if(isOwner()&&!self&&role.value!==(u.role||'resident')){
+      if(!confirm('เปลี่ยนสิทธิ์ของ '+pl.name+' เป็น "'+role.options[role.selectedIndex].text+'" ?'))return;
+      pl.role=role.value;
+    }
+    try{await updateDoc(ref,pl);msg.textContent='';form.style.display='none'}
     catch(e){msg.textContent=e.message}
   };
   const form=h('div',{style:'display:none;margin-top:10px'},
     h('label',{},'ชื่อ-นามสกุล'),name,h('label',{},'บ้านเลขที่'),house,
-    h('label',{},'เบอร์โทร (ข้อมูลติดต่อ)'),phone,h('label',{},'สิทธิ์'),role,
+    h('label',{},'เบอร์โทร (ข้อมูลติดต่อ)'),phone,
+    h('label',{},'สิทธิ์'+(isOwner()?'':' (เปลี่ยนได้เฉพาะแอดมิน)')),role,
     h('p',{class:'meta'},'การแก้เบอร์ตรงนี้ไม่เปลี่ยนชื่อผู้ใช้ที่ใช้ล็อกอิน (ยังเป็นเบอร์ตอนสมัคร)'),
     h('div',{class:'row'},h('button',{class:'sm',onclick:save},'บันทึก'),h('button',{class:'ghost sm',onclick:()=>{form.style.display='none'}},'ยกเลิก')),msg);
-  const btns=[h('button',{class:'ghost sm',onclick:()=>{form.style.display=form.style.display==='none'?'':'none'}},'✏️ แก้ไข')];
-  if(!self){
-    btns.push(h('button',{class:'ghost sm',onclick:()=>{if(confirm('ระงับ '+(u.name||'')+' ? จะเข้าใช้งานไม่ได้จนกว่าจะอนุมัติใหม่'))updateDoc(ref,{approved:false}).catch(e=>alert(e.message))}},'⏸ ระงับ'));
-    btns.push(h('button',{class:'ghost sm',onclick:()=>{if(confirm('ลบข้อมูลสมาชิก '+(u.name||'')+' ?\n(บัญชีล็อกอินยังอยู่ใน Firebase ถ้าเขาล็อกอินอีกจะต้องกรอกข้อมูลและรหัสหมู่บ้านใหม่)'))deleteDoc(ref).catch(e=>alert(e.message))}},'🗑 ลบ'));
+  const btns=[];
+  if(!locked){
+    btns.push(h('button',{class:'ghost sm',onclick:()=>{form.style.display=form.style.display==='none'?'':'none'}},'✏️ แก้ไข'));
+    if(!self){
+      btns.push(h('button',{class:'ghost sm',onclick:()=>{if(confirm('ระงับ '+(u.name||'')+' ? จะเข้าใช้งานไม่ได้จนกว่าจะอนุมัติใหม่'))updateDoc(ref,{approved:false}).catch(e=>alert(e.message))}},'⏸ ระงับ'));
+      btns.push(h('button',{class:'ghost sm',onclick:()=>{if(confirm('ลบข้อมูลสมาชิก '+(u.name||'')+' ?\n(บัญชีล็อกอินยังอยู่ใน Firebase ถ้าเขาล็อกอินอีกจะต้องกรอกข้อมูลและรหัสหมู่บ้านใหม่)'))deleteDoc(ref).catch(e=>alert(e.message))}},'🗑 ลบ'));
+    }
   }
   return h('div',{class:'card'},
-    h('h3',{},u.name||'(ไม่มีชื่อ)',u.role==='admin'?h('span',{class:'badge gray',style:'margin-left:8px'},'ผู้ดูแล'):null,self?h('span',{class:'badge gray',style:'margin-left:6px'},'คุณ'):null),
+    h('h3',{},u.name||'(ไม่มีชื่อ)',RL[u.role]?h('span',{class:'badge gray',style:'margin-left:8px'},RL[u.role]):null,self?h('span',{class:'badge gray',style:'margin-left:6px'},'คุณ'):null),
     h('div',{class:'meta'},'บ้าน '+(u.house||'-')+' · โทร '+(u.phone||'-')+(u.email?' · '+u.email:'')),
     h('div',{class:'meta'},'สมัครเมื่อ '+when(u.createdAt)),
-    h('div',{class:'row',style:'margin-top:10px;flex-wrap:wrap'},...btns),form);
+    btns.length?h('div',{class:'row',style:'margin-top:10px;flex-wrap:wrap'},...btns):null,form);
 }
 
 function renderMembers(body){
