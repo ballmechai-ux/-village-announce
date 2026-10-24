@@ -39,6 +39,20 @@ label{font-weight:600;font-size:16px}
 .center{text-align:center;padding:48px 8px}
 .err{color:var(--red);min-height:1.5em}
 .live{opacity:.7;border:1.5px dashed var(--line);background:transparent}
+.chat{position:relative;display:flex;flex-direction:column;border:1px solid var(--line);border-radius:14px;background:var(--bg);overflow:hidden}
+.chat-list{height:min(50vh,420px);overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:8px;overscroll-behavior:contain}
+.bub{max-width:84%;padding:8px 13px;border-radius:16px 16px 16px 4px;background:var(--card);border:1px solid var(--line);align-self:flex-start;word-break:break-word}
+.bub.me{align-self:flex-end;background:var(--pri);color:var(--on);border-color:transparent;border-radius:16px 16px 4px 16px}
+.bub.adm{border-left:5px solid var(--amber)}
+.bub .who{font:500 13px Kanit,sans-serif;color:var(--mut)}
+.bub.me .who{color:inherit}
+.bub .txt{font-size:18px;line-height:1.45}
+.bub .t{font-size:12px;opacity:.7;display:flex;gap:10px;align-items:center;justify-content:flex-end}
+.bub .x{background:none;border:0;color:inherit;text-decoration:underline;font-size:12px;min-height:0;padding:0;opacity:.8}
+.chat-in{display:flex;gap:8px;padding:10px;border-top:1px solid var(--line);background:var(--card)}
+.chat-in input{margin:0}
+.nomsg{color:var(--mut);text-align:center;margin:auto}
+.pill{position:absolute;left:50%;transform:translateX(-50%);bottom:74px;min-height:36px;padding:4px 14px;font-size:14px;border-radius:99px;box-shadow:0 2px 8px rgba(0,0,0,.35)}
 </style>
 </head>
 <body>
@@ -46,7 +60,7 @@ label{font-weight:600;font-size:16px}
 <script type="module">
 import{initializeApp}from"https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import{getAuth,GoogleAuthProvider,signInWithPopup,signOut,onAuthStateChanged,createUserWithEmailAndPassword,signInWithEmailAndPassword}from"https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
-import{getFirestore,doc,getDoc,setDoc,updateDoc,deleteDoc,addDoc,collection,query,where,orderBy,limit,onSnapshot,serverTimestamp}from"https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+import{getFirestore,doc,getDoc,getDocs,setDoc,updateDoc,deleteDoc,addDoc,collection,query,where,orderBy,limit,onSnapshot,serverTimestamp,Bytes}from"https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
 const app=initializeApp({
   apiKey:"AIzaSyDRAIAlliLTUAxYTgn0iIiyrCM_0D3Zxjo",
@@ -117,7 +131,7 @@ function showLogin(){
 
 const TOKEN_URL='https://village-token.ballmechai.workers.dev';
 const LK_SRC='https://cdn.jsdelivr.net/npm/livekit-client@2.5.0/dist/livekit-client.umd.min.js';
-let liveRoom=null,listenRoom=null,rxRoom=null,receiverOn=false,rxWant=false,rxBusy=false,wl=null;
+let rec=null,recChunks=[],recT0=0,recEndAt=0,recMime='',recCap=null,pendingRec=null,liveAnnId=null,curLiveId=null,liveRoom=null,listenRoom=null,rxRoom=null,receiverOn=false,rxWant=false,rxBusy=false,wl=null;
 
 const loadLK=()=>window.LivekitClient?Promise.resolve(window.LivekitClient):new Promise((ok,no)=>{
   const t=document.createElement('script');t.src=LK_SRC;
@@ -134,7 +148,7 @@ async function getToken(mode){
 const liveOn=d=>!!d&&d.active===true&&(!d.startedAt?.toDate||Date.now()-d.startedAt.toDate().getTime()<3*3600*1000);
 const offLive=()=>setDoc(doc(db,'live','current'),{active:false,endedAt:serverTimestamp()});
 function stopRooms(){
-  receiverOn=false;rxWant=false;
+  receiverOn=false;rxWant=false;try{clearTimeout(recCap);rec?.stop()}catch(_){}rec=null;
   [liveRoom,listenRoom,rxRoom].forEach(r=>{try{r?.disconnect()}catch(_){}});
   liveRoom=listenRoom=rxRoom=null;
 }
@@ -147,49 +161,200 @@ async function listenConnect(){
   try{await room.startAudio()}catch(_){}
   return room;
 }
+function startRec(room,LK){
+  try{
+    const tr=room.localParticipant.getTrackPublication(LK.Track.Source.Microphone)?.track?.mediaStreamTrack;
+    if(!tr||!window.MediaRecorder)return;
+    const mime=['audio/webm;codecs=opus','audio/webm','audio/mp4'].find(m=>MediaRecorder.isTypeSupported(m))||'';
+    recChunks=[];recMime=mime;recT0=Date.now();recEndAt=0;
+    rec=new MediaRecorder(new MediaStream([tr]),{...(mime?{mimeType:mime}:{}),audioBitsPerSecond:32000});
+    rec.ondataavailable=e=>{if(e.data.size)recChunks.push(e.data)};
+    rec.start(1000);
+    recCap=setTimeout(()=>{if(rec&&rec.state==='recording'){recEndAt=Date.now();rec.stop()}},15*60*1000);
+  }catch(_){rec=null}
+}
+function stopRec(){
+  return new Promise(res=>{
+    clearTimeout(recCap);
+    const r=rec;rec=null;
+    const done=()=>{
+      const blob=new Blob(recChunks,{type:recMime||'audio/webm'});
+      const out=blob.size>3000?{blob,mime:blob.type,ms:(recEndAt||Date.now())-recT0}:null;
+      recChunks=[];res(out);
+    };
+    if(!r||r.state==='inactive'){done();return}
+    r.onstop=done;try{r.stop()}catch(_){done()}
+  });
+}
+async function saveRecording(r,title){
+  const buf=new Uint8Array(await r.blob.arrayBuffer());
+  const SZ=700000,n=Math.ceil(buf.length/SZ);
+  const ref=doc(collection(db,'announcements'));
+  try{
+    for(let i=0;i<n;i++)await setDoc(doc(db,'live','rec_'+ref.id+'_'+i),{i,data:Bytes.fromUint8Array(buf.slice(i*SZ,(i+1)*SZ))});
+    await setDoc(ref,{title,text:'',level:'normal',type:'audio',audioParts:n,audioMime:r.mime,audioMs:r.ms,createdBy:user.uid,createdAt:serverTimestamp()});
+  }catch(e){
+    for(let i=0;i<n;i++)await deleteDoc(doc(db,'live','rec_'+ref.id+'_'+i)).catch(()=>{});
+    throw e;
+  }
+}
+async function removeAnn(id,n){
+  for(let i=0;i<n;i++)await deleteDoc(doc(db,'live','rec_'+id+'_'+i)).catch(()=>{});
+  const ms=await getDocs(collection(db,'announcements',id,'messages'));
+  await Promise.all(ms.docs.map(m=>deleteDoc(m.ref)));
+  await deleteDoc(doc(db,'announcements',id));
+}
+async function loadAudio(id,n,mime){
+  const ds=await Promise.all(Array.from({length:n},(_,i)=>getDoc(doc(db,'live','rec_'+id+'_'+i))));
+  if(ds.some(d=>!d.exists()))throw new Error('ไฟล์เสียงไม่ครบ');
+  return new Blob(ds.map(d=>d.data().data.toUint8Array()),{type:mime||'audio/webm'});
+}
+const audioUrls=new Map();
+function audioPlayer(id,a){
+  const box=h('div',{style:'margin-top:8px',onclick:e=>e.stopPropagation()});
+  const secs=Math.round((a.audioMs||0)/1000);
+  const label='▶ ฟังเสียงที่บันทึก'+(secs?' ('+Math.floor(secs/60)+':'+String(secs%60).padStart(2,'0')+')':'');
+  const btn=h('button',{},label),err=h('p',{class:'err'});
+  const play=url=>box.replaceChildren(h('audio',{controls:'',autoplay:'',src:url,style:'width:100%'}));
+  btn.onclick=async()=>{
+    if(audioUrls.has(id))return play(audioUrls.get(id));
+    btn.disabled=true;btn.textContent='กำลังโหลดเสียง…';err.textContent='';
+    try{const b=await loadAudio(id,a.audioParts,a.audioMime);const u=URL.createObjectURL(b);audioUrls.set(id,u);play(u)}
+    catch(e){err.textContent=e.message;btn.disabled=false;btn.textContent=label}
+  };
+  box.append(btn,err);return box;
+}
+
+const cleaned=new Set();
+async function cleanupLive(id){
+  if(!id||cleaned.has(id))return;cleaned.add(id);
+  try{
+    const ms=await getDocs(collection(db,'announcements',id,'messages'));
+    await Promise.all(ms.docs.map(m=>deleteDoc(m.ref)));
+    await deleteDoc(doc(db,'announcements',id));
+  }catch(_){cleaned.delete(id)}
+}
 async function stopLive(){
-  const r=liveRoom;liveRoom=null;
+  const r=liveRoom,id=liveAnnId;liveRoom=null;liveAnnId=null;
   try{await offLive()}catch(_){}
   try{await r?.disconnect()}catch(_){}
+  cleanupLive(id);
+}
+
+const hhmm=t=>{const d=t?.toDate?.();return d?d.toLocaleTimeString('th-TH',{hour:'2-digit',minute:'2-digit'}):'…'};
+function chatBox(id,o={}){
+  const list=h('div',{class:'chat-list'});
+  const pill=h('button',{class:'pill',style:'display:none',onclick:()=>{list.scrollTop=list.scrollHeight;pill.style.display='none'}},'ข้อความใหม่ ↓');
+  list.addEventListener('scroll',()=>{if(list.scrollHeight-list.scrollTop-list.clientHeight<40)pill.style.display='none'});
+  const inp=h('input',{placeholder:'พิมพ์ข้อความ…',maxlength:'300',enterkeyhint:'send'});
+  const err=h('div',{class:'err',style:'padding:0 12px'});
+  let last=0,first=true;
+  const send=async()=>{
+    const v=inp.value.trim();if(!v)return;
+    if(Date.now()-last<3000){err.textContent='รอสักครู่ก่อนส่งข้อความถัดไป';return}
+    last=Date.now();err.textContent='';
+    try{await addDoc(collection(db,'announcements',id,'messages'),{uid:user.uid,name:profile.name,house:profile.house,text:v,createdAt:serverTimestamp()});inp.value='';inp.focus()}
+    catch(e){err.textContent=e.message}
+  };
+  inp.addEventListener('keydown',e=>{if(e.key==='Enter')send()});
+  const bubble=d=>{
+    const m=d.data(),me=m.uid===user.uid,host=!!o.host&&m.uid===o.host;
+    return h('div',{class:'bub'+(me?' me':'')+(host?' adm':'')},
+      me?null:h('div',{class:'who'},m.name+' · บ้าน '+m.house+(host?' · ผู้ประกาศ':'')),
+      h('div',{class:'txt'},m.text),
+      h('div',{class:'t'},hhmm(m.createdAt),isAdmin()?h('button',{class:'x',onclick:()=>deleteDoc(d.ref)},'ลบ'):null));
+  };
+  const off=onSnapshot(query(collection(db,'announcements',id,'messages'),orderBy('createdAt','asc'),limit(200)),snap=>{
+    const prev=list.scrollTop;
+    const near=list.scrollHeight-list.scrollTop-list.clientHeight<80;
+    const mine=snap.docs.length>0&&snap.docs[snap.docs.length-1].data().uid===user.uid;
+    list.replaceChildren(...(snap.empty?[h('div',{class:'nomsg'},'ยังไม่มีข้อความ พิมพ์ได้เลย')]:snap.docs.map(bubble)));
+    if(first||near||mine){list.scrollTop=list.scrollHeight;pill.style.display='none'}
+    else{list.scrollTop=prev;pill.style.display=''}
+    first=false;
+  },e=>{list.replaceChildren(h('div',{class:'nomsg'},e.message))});
+  return{off,el:h('div',{class:'chat'},list,pill,h('div',{class:'chat-in'},inp,h('button',{onclick:send},'ส่ง')),err)};
+}
+function chatSync(hold,cs,d){
+  const id=liveOn(d)&&d.announcementId;
+  if(!id){if(cs.off){cs.off();cs.off=null;cs.id=null}hold.replaceChildren();return}
+  if(cs.id===id)return;
+  if(cs.off)cs.off();
+  const cb=chatBox(id,{host:d.startedBy});
+  cs.id=id;cs.off=cb.off;
+  hold.replaceChildren(h('h3',{style:'margin:14px 0 8px'},'แชทสด'),cb.el);
 }
 
 function liveAdminCard(){
   const title=h('input',{placeholder:'หัวข้อประกาศสด (ไม่บังคับ)'});
   const st=h('p',{class:'meta'},liveRoom?'🔴 ออกอากาศอยู่':'');
   const btn=h('button',{});
-  const clear=h('button',{class:'ghost sm',style:'display:none',onclick:()=>offLive()},'ล้างสถานะสดที่ค้างอยู่');
+  let lastLive=null;
+  const clear=h('button',{class:'ghost sm',style:'display:none',onclick:async()=>{await offLive();cleanupLive(lastLive?.announcementId)}},'ล้างสถานะสดที่ค้างอยู่');
+  const hold=h('div'),cs={id:null,off:null},saveBox=h('div');
+  const renderSave=()=>{
+    saveBox.replaceChildren();
+    const rc=pendingRec;if(!rc)return;
+    const url=URL.createObjectURL(rc.blob),secs=Math.round(rc.ms/1000);
+    const ttl=h('input',{value:title.value.trim()||'ประกาศเสียง'}),msg=h('p',{class:'meta'});
+    const keep=h('button',{},'เก็บเสียงไว้'),drop=h('button',{class:'ghost'},'ไม่เก็บ');
+    keep.onclick=async()=>{
+      keep.disabled=drop.disabled=true;msg.textContent='กำลังบันทึกเสียง…';
+      try{await saveRecording(rc,ttl.value.trim()||'ประกาศเสียง');pendingRec=null;URL.revokeObjectURL(url);
+        saveBox.replaceChildren(h('p',{},'✅ เก็บเสียงแล้ว ลูกบ้านฟังย้อนหลังได้ในรายการประกาศ'))}
+      catch(e){msg.textContent='บันทึกไม่สำเร็จ: '+e.message;keep.disabled=drop.disabled=false}
+    };
+    drop.onclick=()=>{pendingRec=null;URL.revokeObjectURL(url);saveBox.replaceChildren(h('p',{class:'meta'},'ไม่เก็บเสียง ลบทิ้งแล้ว'))};
+    saveBox.append(h('div',{class:'card',style:'border:2px solid var(--amber);margin-top:12px'},
+      h('h3',{},'เก็บเสียงประกาศไว้ไหม?'),
+      h('p',{class:'meta'},'ความยาว '+Math.floor(secs/60)+':'+String(secs%60).padStart(2,'0')+' · ฟังตรวจก่อนได้ ลูกบ้านที่พลาดจะกดฟังย้อนหลังได้'),
+      h('audio',{controls:'',src:url,style:'width:100%;margin:8px 0'}),
+      h('label',{},'ชื่อประกาศ'),ttl,h('div',{class:'row'},keep,drop),msg));
+  };
+  unsubs.push(()=>{if(cs.off)cs.off()});
   const paint=()=>{const on=!!liveRoom;btn.textContent=on?'■ จบการประกาศสด':'● เริ่มประกาศสด';btn.className=on?'danger':'';title.disabled=on};
-  unsubs.push(onSnapshot(doc(db,'live','current'),x=>{clear.style.display=(liveOn(x.data())&&!liveRoom)?'':'none'}));
+  unsubs.push(onSnapshot(doc(db,'live','current'),x=>{
+    lastLive=x.data();curLiveId=liveOn(lastLive)?lastLive.announcementId:null;
+    clear.style.display=(liveOn(lastLive)&&!liveRoom)?'':'none';
+    chatSync(hold,cs,lastLive);
+  }));
   btn.onclick=async()=>{
     btn.disabled=true;
     try{
-      if(liveRoom){await stopLive();st.textContent='จบการประกาศแล้ว'}
+      if(liveRoom){
+        const rc=await stopRec();await stopLive();
+        if(rc){pendingRec=rc;renderSave();st.textContent='จบการประกาศแล้ว เลือกเก็บเสียงด้านล่าง (แชทสดถูกลบแล้ว)'}
+        else st.textContent='จบการประกาศแล้ว (ลบแชทสดทิ้งแล้ว)';
+      }
       else{
         st.textContent='กำลังเปิดไมค์ (อนุญาตไมโครโฟนเมื่อเบราว์เซอร์ถาม)…';
         const[LK,t]=await Promise.all([loadLK(),getToken('speak')]);
         const room=new LK.Room({audioCaptureDefaults:{echoCancellation:true,noiseSuppression:true,autoGainControl:true}});
         await room.connect(t.url,t.token);
         await room.localParticipant.setMicrophoneEnabled(true);
-        liveRoom=room;
-        room.on(LK.RoomEvent.Disconnected,()=>{if(liveRoom===room){liveRoom=null;offLive().catch(()=>{});st.textContent='การเชื่อมต่อหลุด ประกาศสดสิ้นสุด';paint()}});
+        liveRoom=room;startRec(room,LK);
+        room.on(LK.RoomEvent.Disconnected,()=>{if(liveRoom===room){const id=liveAnnId;liveRoom=null;liveAnnId=null;offLive().catch(()=>{});cleanupLive(id);stopRec().then(rc=>{if(rc){pendingRec=rc;renderSave()}});st.textContent='การเชื่อมต่อหลุด ประกาศสดสิ้นสุด';paint()}});
         const ttl=title.value.trim()||'ประกาศสด';
         const a=await addDoc(collection(db,'announcements'),{title:ttl,text:'',level:'normal',type:'live',createdBy:user.uid,createdAt:serverTimestamp()});
+        liveAnnId=a.id;
         await setDoc(doc(db,'live','current'),{active:true,title:ttl,announcementId:a.id,startedBy:user.uid,startedAt:serverTimestamp()});
         st.textContent='กำลังเชื่อมตู้ลำโพง… รอ 3 วินาที แล้วพูดได้เลย';
         setTimeout(()=>{if(liveRoom===room)st.textContent='🔴 ออกอากาศอยู่ พูดได้เลย'},3000);
       }
-    }catch(e){st.textContent=(e.name==='NotAllowedError'?'ไม่ได้อนุญาตไมโครโฟน':e.message)||String(e);await stopLive()}
+    }catch(e){st.textContent=(e.name==='NotAllowedError'?'ไม่ได้อนุญาตไมโครโฟน':e.message)||String(e);await stopRec();await stopLive()}
     finally{btn.disabled=false;paint()}
   };
-  paint();
+  paint();renderSave();
   return h('div',{class:'card'},h('h3',{},'ประกาศสด'),title,btn,st,clear,
     h('p',{class:'meta'},'ถือมือถือห่างจากลำโพงตู้ หรือใช้หูฟัง เพื่อกันเสียงหอน'),
-    h('button',{class:'ghost sm',onclick:showReceiver},'โหมดตัวรับ (ตู้ลำโพง)'));
+    h('button',{class:'ghost sm',onclick:showReceiver},'โหมดตัวรับ (ตู้ลำโพง)'),saveBox,hold);
 }
 
 function liveListenCard(){
   const st=h('p',{},'ตอนนี้ไม่มีประกาศสด'),btn=h('button',{style:'display:none'});
-  const box=h('div',{class:'card'},h('h3',{},'ประกาศสด'),st,btn,
+  const hold=h('div'),cs={id:null,off:null};
+  unsubs.push(()=>{if(cs.off)cs.off()});
+  const box=h('div',{class:'card'},h('h3',{},'ประกาศสด'),st,btn,hold,
     h('button',{class:'ghost sm',style:'margin-top:10px',onclick:showReceiver},'โหมดตัวรับ (ตู้ลำโพง)'));
   let cur=null;
   const stopListen=()=>{const r=listenRoom;listenRoom=null;try{r?.disconnect()}catch(_){}};
@@ -212,7 +377,7 @@ function liveListenCard(){
     }catch(e){st.textContent=e.message}
     finally{btn.disabled=false;paint()}
   };
-  unsubs.push(onSnapshot(doc(db,'live','current'),x=>{cur=x.data();paint()},()=>{}));
+  unsubs.push(onSnapshot(doc(db,'live','current'),x=>{cur=x.data();paint();chatSync(hold,cs,cur)},()=>{}));
   return box;
 }
 
@@ -360,11 +525,14 @@ function showMain(tab='news'){
   if(isAdmin())body.append(composer());
   body.append(list);
   unsubs.push(onSnapshot(query(collection(db,'announcements'),orderBy('createdAt','desc'),limit(30)),snap=>{
-    if(snap.empty){list.replaceChildren(h('p',{class:'center meta'},'ยังไม่มีประกาศ'));return}
-    list.replaceChildren(...snap.docs.map(d=>{const a=d.data();
+    if(isAdmin()&&!liveRoom)snap.docs.forEach(d=>{const a=d.data();
+      if(a.type==='live'&&d.id!==liveAnnId&&d.id!==curLiveId&&a.createdAt?.toDate&&Date.now()-a.createdAt.toDate().getTime()>120000)cleanupLive(d.id)});
+    const docs=snap.docs.filter(d=>d.data().type!=='live');
+    if(!docs.length){list.replaceChildren(h('p',{class:'center meta'},'ยังไม่มีประกาศ'));return}
+    list.replaceChildren(...docs.map(d=>{const a=d.data();
       return h('div',{class:'card item '+a.level,onclick:()=>showThread(d.id,a)},
-        h('span',{class:'tag '+a.level},LV[a.level]||'ทั่วไป'),a.type==='live'?h('span',{class:'tag'},'สด'):null,h('h3',{},a.title),
-        h('div',{},a.text),h('div',{class:'meta'},when(a.createdAt)+' · แตะเพื่อถามหรือตอบ'))}));
+        h('span',{class:'tag '+a.level},LV[a.level]||'ทั่วไป'),a.type==='audio'?h('span',{class:'tag'},'🎧 เสียงบันทึก'):null,h('h3',{},a.title),
+        h('div',{},a.text),h('div',{class:'meta'},when(a.createdAt)+' · แตะเพื่อถามหรือตอบ'),a.type==='audio'?audioPlayer(d.id,a):null,isAdmin()?h('button',{class:'ghost sm',style:'margin-top:8px',onclick:e=>{e.stopPropagation();if(confirm('ลบประกาศนี้ทิ้งถาวร?'))removeAnn(d.id,a.audioParts||0)}},'ลบ'):null)}));
   },showError));
 }
 
@@ -396,25 +564,10 @@ function renderMembers(body){
 
 function showThread(id,a){
   const subs=unsubs.slice(0,1);unsubs.forEach((u,i)=>{if(i>0)u()});unsubs=subs;
-  const msgs=h('div'),inp=h('input',{placeholder:'พิมพ์คำถาม…',maxlength:'300'});
-  const err=h('p',{class:'err'});let last=0;
-  const send=async()=>{
-    const v=inp.value.trim();if(!v)return;
-    if(Date.now()-last<5000){err.textContent='รอสักครู่ก่อนส่งข้อความถัดไป';return}
-    last=Date.now();err.textContent='';
-    try{await addDoc(collection(db,'announcements',id,'messages'),{uid:user.uid,name:profile.name,house:profile.house,text:v,createdAt:serverTimestamp()});inp.value=''}
-    catch(e){err.textContent=e.message}
-  };
-  inp.addEventListener('keydown',e=>{if(e.key==='Enter')send()});
+  const cb=chatBox(id);unsubs.push(cb.off);
   show(h('div',{class:'bar'},h('button',{class:'ghost sm',onclick:()=>showMain()},'‹ กลับ'),logoutBtn()),
-    h('div',{class:'card item '+a.level},h('span',{class:'tag '+a.level},LV[a.level]||'ทั่วไป'),a.type==='live'?h('span',{class:'tag'},'สด'):null,h('h3',{},a.title),h('div',{},a.text),h('div',{class:'meta'},when(a.createdAt))),
-    h('div',{class:'card'},h('h3',{},'ถาม-ตอบ'),msgs,h('div',{class:'row',style:'margin-top:12px'},inp,h('button',{onclick:send},'ส่ง')),err));
-  unsubs.push(onSnapshot(query(collection(db,'announcements',id,'messages'),orderBy('createdAt','asc'),limit(200)),snap=>{
-    if(snap.empty){msgs.replaceChildren(h('p',{class:'meta'},'ยังไม่มีคำถาม'));return}
-    msgs.replaceChildren(...snap.docs.map(d=>{const m=d.data();
-      return h('div',{class:'msg'},h('b',{},m.name+' (บ้าน '+m.house+')'),' ',h('span',{class:'meta'},when(m.createdAt)),h('div',{},m.text),
-        isAdmin()?h('button',{class:'ghost sm',onclick:()=>deleteDoc(doc(db,'announcements',id,'messages',d.id))},'ลบ'):null)}));
-  },showError));
+    h('div',{class:'card item '+a.level},h('span',{class:'tag '+a.level},LV[a.level]||'ทั่วไป'),h('h3',{},a.title),h('div',{},a.text),h('div',{class:'meta'},when(a.createdAt))),
+    h('h3',{style:'margin:14px 0 8px'},'ถาม-ตอบ'),cb.el);
 }
 </script>
 </body>
