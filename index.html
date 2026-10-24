@@ -793,17 +793,57 @@ function showComplaint(id){
     holder,h('h3',{style:'margin:14px 0 8px'},'พูดคุยเรื่องนี้'),cbx.el);
 }
 
+function memberCard(d){
+  const u=d.data(),self=d.id===user.uid,ref=doc(db,'users',d.id);
+  const name=h('input',{value:u.name||''}),house=h('input',{value:u.house||''}),phone=h('input',{type:'tel',value:u.phone||''});
+  const role=h('select',{},h('option',{value:'resident'},'ลูกบ้าน'),h('option',{value:'admin'},'ผู้ดูแล'));
+  role.value=u.role||'resident';role.disabled=self;
+  const msg=h('p',{class:'err'});
+  const save=async()=>{
+    if(!name.value.trim()||!house.value.trim()){msg.textContent='กรุณากรอกชื่อและบ้านเลขที่';return}
+    if(role.value==='admin'&&u.role!=='admin'&&!confirm('ตั้ง '+name.value.trim()+' เป็นผู้ดูแล? จะลบประกาศและจัดการสมาชิกได้'))return;
+    try{await updateDoc(ref,{name:name.value.trim(),house:house.value.trim(),phone:phone.value.trim(),role:role.value});msg.textContent='';form.style.display='none'}
+    catch(e){msg.textContent=e.message}
+  };
+  const form=h('div',{style:'display:none;margin-top:10px'},
+    h('label',{},'ชื่อ-นามสกุล'),name,h('label',{},'บ้านเลขที่'),house,
+    h('label',{},'เบอร์โทร (ข้อมูลติดต่อ)'),phone,h('label',{},'สิทธิ์'),role,
+    h('p',{class:'meta'},'การแก้เบอร์ตรงนี้ไม่เปลี่ยนชื่อผู้ใช้ที่ใช้ล็อกอิน (ยังเป็นเบอร์ตอนสมัคร)'),
+    h('div',{class:'row'},h('button',{class:'sm',onclick:save},'บันทึก'),h('button',{class:'ghost sm',onclick:()=>{form.style.display='none'}},'ยกเลิก')),msg);
+  const btns=[h('button',{class:'ghost sm',onclick:()=>{form.style.display=form.style.display==='none'?'':'none'}},'✏️ แก้ไข')];
+  if(!self){
+    btns.push(h('button',{class:'ghost sm',onclick:()=>{if(confirm('ระงับ '+(u.name||'')+' ? จะเข้าใช้งานไม่ได้จนกว่าจะอนุมัติใหม่'))updateDoc(ref,{approved:false}).catch(e=>alert(e.message))}},'⏸ ระงับ'));
+    btns.push(h('button',{class:'ghost sm',onclick:()=>{if(confirm('ลบข้อมูลสมาชิก '+(u.name||'')+' ?\n(บัญชีล็อกอินยังอยู่ใน Firebase ถ้าเขาล็อกอินอีกจะต้องกรอกข้อมูลและรหัสหมู่บ้านใหม่)'))deleteDoc(ref).catch(e=>alert(e.message))}},'🗑 ลบ'));
+  }
+  return h('div',{class:'card'},
+    h('h3',{},u.name||'(ไม่มีชื่อ)',u.role==='admin'?h('span',{class:'badge gray',style:'margin-left:8px'},'ผู้ดูแล'):null,self?h('span',{class:'badge gray',style:'margin-left:6px'},'คุณ'):null),
+    h('div',{class:'meta'},'บ้าน '+(u.house||'-')+' · โทร '+(u.phone||'-')+(u.email?' · '+u.email:'')),
+    h('div',{class:'meta'},'สมัครเมื่อ '+when(u.createdAt)),
+    h('div',{class:'row',style:'margin-top:10px;flex-wrap:wrap'},...btns),form);
+}
+
 function renderMembers(body){
-  const list=h('div');
-  body.append(settingsCard(),list);
+  const pend=h('div'),mem=h('div'),q=h('input',{placeholder:'ค้นหาชื่อ / บ้านเลขที่ / เบอร์'});
+  body.append(settingsCard(),
+    h('h3',{style:'margin:14px 0 8px'},'รออนุมัติ / ถูกระงับ'),pend,
+    h('h3',{style:'margin:14px 0 8px'},'สมาชิกทั้งหมด'),q,mem);
+  let all=[];
+  const paintMem=()=>{
+    const k=q.value.trim().toLowerCase();
+    const arr=all.filter(d=>{const u=d.data();return !k||[u.name,u.house,u.phone].join(' ').toLowerCase().includes(k)})
+      .sort((a,b)=>String(a.data().house||'').localeCompare(String(b.data().house||''),'th',{numeric:true}));
+    mem.replaceChildren(h('p',{class:'meta'},'ทั้งหมด '+all.length+' คน'+(k?' · พบ '+arr.length:'')),...(arr.length?arr.map(memberCard):[h('p',{class:'center meta'},'ไม่พบสมาชิก')]));
+  };
+  q.addEventListener('input',paintMem);
   unsubs.push(onSnapshot(query(collection(db,'users'),where('approved','==',false)),snap=>{
-    if(snap.empty){list.replaceChildren(h('p',{class:'center meta'},'ไม่มีคำขอที่รออนุมัติ'));return}
-    list.replaceChildren(...snap.docs.map(d=>{const u=d.data();
-      return h('div',{class:'card'},h('h3',{},u.name),h('div',{class:'meta'},'บ้าน '+u.house+' · '+(u.phone||'ไม่ระบุเบอร์')+' · '+(u.email||'')),
+    if(snap.empty){pend.replaceChildren(h('p',{class:'center meta'},'ไม่มีรายการ'));return}
+    pend.replaceChildren(...snap.docs.map(d=>{const u=d.data();
+      return h('div',{class:'card'},h('h3',{},u.name||''),h('div',{class:'meta'},'บ้าน '+(u.house||'-')+' · '+(u.phone||'ไม่ระบุเบอร์')+' · '+(u.email||'')),
         h('div',{class:'row',style:'margin-top:10px'},
-          h('button',{class:'sm',onclick:()=>updateDoc(doc(db,'users',d.id),{approved:true})},'อนุมัติ'),
-          h('button',{class:'sm danger',onclick:()=>{if(confirm('ลบคำขอของ '+u.name+' ?'))deleteDoc(doc(db,'users',d.id))}},'ลบ')))}));
+          h('button',{class:'sm',onclick:()=>updateDoc(doc(db,'users',d.id),{approved:true}).catch(e=>alert(e.message))},'อนุมัติ / เปิดใช้'),
+          h('button',{class:'sm danger',onclick:()=>{if(confirm('ลบ '+(u.name||'')+' ?'))deleteDoc(doc(db,'users',d.id)).catch(e=>alert(e.message))}},'ลบ')))}));
   },showError));
+  unsubs.push(onSnapshot(query(collection(db,'users'),where('approved','==',true)),snap=>{all=snap.docs;paintMem()},showError));
 }
 
 function showThread(id,a){
