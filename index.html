@@ -3,11 +3,13 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#17795f" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0e1814" media="(prefers-color-scheme: dark)">
 <title>ประกาศหมู่บ้าน</title>
 <link href="https://fonts.googleapis.com/css2?family=Kanit:wght@400;500;600&family=Sarabun:wght@400;600&display=swap" rel="stylesheet">
 <style>
-:root{--bg:#eaf0f5;--card:#fff;--ink:#14202b;--mut:#5d6b78;--pri:#0f4c75;--on:#fff;--line:#d3dde6;--amber:#b86e00;--red:#c62828;--ok:#1b7a4a}
-@media(prefers-color-scheme:dark){:root{--bg:#0e151b;--card:#17212a;--ink:#eaf1f6;--mut:#93a3b1;--pri:#6cb6e8;--on:#08202f;--line:#27343f;--amber:#f0a73a;--red:#ff7a70;--ok:#5ad08f}}
+:root{color-scheme:light dark;--bg:#eef3ee;--card:#fff;--ink:#16231d;--mut:#586a60;--pri:#17795f;--pri2:#2a9f7d;--on:#fff;--line:#d3e0d7;--amber:#b4600a;--red:#c62828;--ok:#1b7a4a;--shadow:0 1px 2px rgba(20,50,35,.08),0 4px 14px rgba(20,50,35,.06)}
+@media(prefers-color-scheme:dark){:root{--bg:#0e1814;--card:#17251f;--ink:#e8f3ed;--mut:#93aa9f;--pri:#4fd1a1;--pri2:#1f8f73;--on:#05241a;--line:#27392f;--amber:#f2a93b;--red:#ff8a80;--ok:#5ad08f;--shadow:0 1px 2px rgba(0,0,0,.4),0 4px 14px rgba(0,0,0,.25)}}
 *{box-sizing:border-box}
 html,body{margin:0;background:var(--bg);color:var(--ink);font:18px/1.55 Sarabun,sans-serif}
 body{padding:env(safe-area-inset-top,0) 0 env(safe-area-inset-bottom,0)}
@@ -67,6 +69,37 @@ label{font-weight:600;font-size:16px}
 .files{display:flex;flex-direction:column;gap:6px;margin-top:8px}
 .files img{max-width:100%;border-radius:10px;margin-top:6px}
 details.card summary{cursor:pointer;font-family:Kanit,sans-serif;font-weight:500}
+.chat-foot{background:var(--card);border-top:1px solid var(--line)}
+.chat-foot .chat-in{border-top:0}
+.chat.fixed .chat-list{height:min(60vh,520px)}
+.chat.fixed .chat-foot{position:fixed;left:0;right:0;bottom:0;z-index:20;max-width:640px;margin:0 auto;padding-bottom:env(safe-area-inset-bottom,0px);box-shadow:0 -6px 16px rgba(0,0,0,.35)}
+.chat.fixed .pill{bottom:12px}
+main.hasfix{padding-bottom:140px}
+.hero{background:linear-gradient(135deg,var(--pri),var(--pri2));color:#fff;padding:16px 18px;border-radius:18px;margin-bottom:14px;box-shadow:var(--shadow)}
+.hero h1{color:#fff;font-size:26px}
+.hero .who{color:rgba(255,255,255,.88)}
+.hero button.ghost{color:#fff;border-color:rgba(255,255,255,.6);background:rgba(255,255,255,.12)}
+@media(prefers-color-scheme:dark){.hero{background:linear-gradient(135deg,#14584a,#1f7a63)}}
+.center h1{color:var(--pri)}
+.tabs{background:var(--card);padding:5px;border-radius:16px;border:1px solid var(--line);box-shadow:var(--shadow)}
+.tabs button{border-radius:12px;font-weight:500}
+.tabs button.ghost{background:transparent;border-color:transparent;color:var(--mut)}
+button{border-radius:12px;font-weight:500;letter-spacing:.1px}
+button.ghost{background:transparent;color:var(--pri);border:1.5px solid var(--line)}
+button.danger{background:var(--red);color:#fff}
+.card{border-radius:18px;box-shadow:var(--shadow)}
+.card.item{border-left-width:7px}
+input,textarea,select{border-radius:12px;background:var(--bg)}
+input:focus,textarea:focus,select:focus{border-color:var(--pri)}
+.tag{background:color-mix(in srgb,var(--pri) 14%,var(--card));color:var(--pri);font-weight:500}
+.tag.urgent{background:var(--amber);color:#fff}.tag.emergency{background:var(--red);color:#fff}
+.chat{border-radius:18px;background:color-mix(in srgb,var(--pri) 5%,var(--bg))}
+.bub{border-radius:18px 18px 18px 6px;box-shadow:0 1px 2px rgba(20,50,35,.08)}
+.bub.me{border-radius:18px 18px 6px 18px;background:linear-gradient(135deg,var(--pri),var(--pri2));color:#fff}
+@media(prefers-color-scheme:dark){.bub.me{background:linear-gradient(135deg,#1f8f73,#2aa27f);color:#fff}}
+.chat-foot,.chat-in{background:var(--card)}
+.badge{background:var(--red)}
+h3{font-weight:500}
 </style>
 </head>
 <body>
@@ -92,7 +125,7 @@ let user=null,profile=null,unsubs=[],signingUp=false;
 const h=(t,a={},...k)=>{const e=document.createElement(t);
   for(const[x,v]of Object.entries(a)){if(x==='class')e.className=v;else if(x.startsWith('on'))e.addEventListener(x.slice(2),v);else e.setAttribute(x,v)}
   k.flat().forEach(c=>{if(c!=null)e.append(c)});return e};
-const show=(...n)=>{root.replaceChildren(...n)};
+const show=(...n)=>{root.classList.remove('hasfix');root.replaceChildren(...n)};
 const clean=()=>{unsubs.forEach(u=>u());unsubs=[]};
 const when=t=>{const d=t?.toDate?.();return d?d.toLocaleString('th-TH',{dateStyle:'medium',timeStyle:'short'}):'กำลังส่ง…'};
 const RL={admin:'แอดมิน',head:'ผู้ใหญ่บ้าน',staff:'ผู้ช่วย'};
@@ -387,7 +420,7 @@ function chatBox(path,o={}){
     else{list.scrollTop=prev;pill.style.display=''}
     first=false;
   },e=>{list.replaceChildren(h('div',{class:'nomsg'},e.message))});
-  return{off,el:h('div',{class:'chat'},list,pill,rbar,h('div',{class:'chat-in'},inp,h('button',{onclick:send},'ส่ง')),err)};
+  return{off,el:h('div',{class:'chat'+(o.fixed?' fixed':'')},list,pill,h('div',{class:'chat-foot'},rbar,h('div',{class:'chat-in'},inp,h('button',{onclick:send},'ส่ง')),err))};
 }
 function chatSync(hold,cs,d){
   const id=liveOn(d)&&d.announcementId;
@@ -646,7 +679,7 @@ function showMain(tab='news'){
   const body=h('div');
   const nb=h('span',{class:'badge',style:'display:none'}),cb=h('span',{class:'badge',style:'display:none'});
   const tb=(k,label,bd)=>h('button',{class:tab===k?'':'ghost',onclick:()=>showMain(k)},label,bd);
-  show(h('div',{class:'bar'},h('div',{},h('h1',{},'ประกาศหมู่บ้าน'),h('div',{class:'who'},profile.name+' · บ้าน '+profile.house)),logoutBtn()),
+  show(h('div',{class:'bar hero'},h('div',{},h('h1',{},'🏡 ประกาศหมู่บ้าน'),h('div',{class:'who'},profile.name+' · บ้าน '+profile.house+(RL[profile.role]?' · '+RL[profile.role]:''))),logoutBtn()),
     h('div',{class:'tabs'},tb('news','ประกาศ',nb),tb('cmp','แจ้งปัญหา',cb),isMgr()?tb('members','สมาชิก'):null),body);
   const setB=(el,n)=>{el.textContent=n>99?'99+':String(n);el.style.display=n?'':'none'};
   let anns=[],cmps=[],paintTab=()=>{};
@@ -796,7 +829,7 @@ function complaintCard(d,inDetail){
 
 function showComplaint(id){
   const subs=unsubs.slice(0,1);unsubs.forEach((u,i)=>{if(i>0)u()});unsubs=subs;
-  const holder=h('div'),cbx=chatBox(['complaints',id],{});
+  const holder=h('div'),cbx=chatBox(['complaints',id],{fixed:true});
   unsubs.push(cbx.off);
   unsubs.push(onSnapshot(doc(db,'complaints',id),x=>{
     if(!x.exists()){showMain('cmp');return}
@@ -804,6 +837,7 @@ function showComplaint(id){
   },showError));
   show(h('div',{class:'bar'},h('button',{class:'ghost sm',onclick:()=>showMain('cmp')},'‹ กลับ'),logoutBtn()),
     holder,h('h3',{style:'margin:14px 0 8px'},'พูดคุยเรื่องนี้'),cbx.el);
+  root.classList.add('hasfix');
 }
 
 function memberCard(d){
@@ -870,12 +904,13 @@ function renderMembers(body){
 
 function showThread(id,a){
   const subs=unsubs.slice(0,1);unsubs.forEach((u,i)=>{if(i>0)u()});unsubs=subs;
-  const cb=chatBox(['announcements',id],{});unsubs.push(cb.off);
+  const cb=chatBox(['announcements',id],{fixed:true});unsubs.push(cb.off);
   unsubs.push(onSnapshot(doc(db,'announcements',id),x=>{if(x.exists())seenSet(id,x.data().msgCount||0)},()=>{}));
   show(h('div',{class:'bar'},h('button',{class:'ghost sm',onclick:()=>showMain()},'‹ กลับ'),logoutBtn()),
     h('div',{class:'card item '+a.level},h('span',{class:'tag '+a.level},LV[a.level]||'ทั่วไป'),h('h3',{},a.title),h('div',{},a.text),
       fileView(a.files),a.type==='audio'?audioPlayer(id,a):null,h('div',{class:'meta'},when(a.createdAt))),
     h('h3',{style:'margin:14px 0 8px'},'ถาม-ตอบ'),cb.el);
+  root.classList.add('hasfix');
 }
 </script>
 </body>
