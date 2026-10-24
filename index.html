@@ -184,7 +184,33 @@ const pwField=(ac,ph,max)=>{
     btn.textContent=show?'ซ่อน':'ดู';btn.setAttribute('aria-pressed',String(show))}},'ดู');
   return{input,row:h('div',{class:'row',style:'margin:4px 0 12px'},input,btn)};
 };
-const toEmail=p=>p.replace(/\D/g,'')+'@village-announce.app';
+const MAXV=5;
+const toEmail=(p,v=1)=>p.replace(/\D/g,'')+(v>1?'-v'+v:'')+'@village-announce.app';
+async function loginPhone(phone,pw){
+  const d=phone.replace(/\D/g,'');
+  let first=1;try{first=+(localStorage.getItem('pv_'+d)||1)||1}catch(_){}
+  first=Math.min(Math.max(first,1),MAXV);
+  const order=[first,...Array.from({length:MAXV},(_,i)=>i+1).filter(v=>v!==first)];
+  let last=null;
+  for(const v of order){
+    try{
+      await signInWithEmailAndPassword(auth,toEmail(phone,v),pw);
+      try{localStorage.setItem('pv_'+d,String(v))}catch(_){}
+      return;
+    }catch(e){last=e;if(e.code==='auth/too-many-requests'||e.code==='auth/network-request-failed')break}
+  }
+  throw last;
+}
+async function createPhoneUser(phone,pw){
+  for(let v=1;v<=MAXV;v++){
+    try{
+      const c=await createUserWithEmailAndPassword(auth,toEmail(phone,v),pw);
+      try{localStorage.setItem('pv_'+phone.replace(/\D/g,''),String(v))}catch(_){}
+      return c;
+    }catch(e){if(e.code!=='auth/email-already-in-use')throw e}
+  }
+  const x=new Error('เบอร์นี้สมัครใหม่ครบจำนวนที่กำหนดแล้ว กรุณาติดต่อแอดมิน');x.isCode=true;throw x;
+}
 const okPhone=p=>/^0\d{8,9}$/.test(p.replace(/\D/g,''));
 const authMsg=e=>({'auth/invalid-credential':'เบอร์หรือรหัสผ่านไม่ถูกต้อง','auth/user-not-found':'ไม่พบเบอร์นี้ในระบบ','auth/wrong-password':'รหัสผ่านไม่ถูกต้อง','auth/email-already-in-use':'เบอร์นี้สมัครแล้ว กรุณาเข้าสู่ระบบ','auth/weak-password':'รหัสผ่านต้องมี 6 ตัวพอดี','auth/too-many-requests':'ลองบ่อยเกินไป รอสักครู่แล้วลองใหม่','auth/operation-not-allowed':'ยังไม่ได้เปิดการสมัครด้วยอีเมล/รหัสผ่านใน Firebase','auth/popup-closed-by-user':'ปิดหน้าต่างก่อนเข้าสู่ระบบสำเร็จ'}[e.code]||('เกิดข้อผิดพลาด: '+(e.code||e.message)));
 
@@ -194,14 +220,14 @@ function showLogin(){
   const err=h('p',{class:'err'});
   const go=async()=>{
     if(!okPhone(phone.value)){err.textContent='เบอร์โทรต้องขึ้นต้นด้วย 0 และมี 9–10 หลัก';return}
-    try{await signInWithEmailAndPassword(auth,toEmail(phone.value),pw.value)}catch(e){err.textContent=authMsg(e)}
+    err.textContent='กำลังเข้าสู่ระบบ…';try{await loginPhone(phone.value,pw.value)}catch(e){err.textContent=authMsg(e)}
   };
   pw.addEventListener('keydown',e=>{if(e.key==='Enter')go()});
   show(h('div',{style:'padding:24px 0'},h('h1',{},'ประกาศหมู่บ้าน'),h('p',{class:'meta'},'รับข่าวสารจากผู้ใหญ่บ้านและคณะกรรมการ')),
     h('div',{class:'card'},
       h('label',{},'เบอร์โทร'),phone,h('label',{},'รหัสผ่าน'),pwf.row,
       h('button',{onclick:go},'เข้าสู่ระบบ'),err,
-      h('p',{class:'meta'},'ยังไม่มีบัญชี?'),
+      h('p',{class:'meta'},'ลืมรหัสผ่านหรือยังไม่มีบัญชี? กด “สมัครใหม่” แล้วใช้เบอร์เดิมได้'),
       h('div',{class:'row'},
         h('button',{class:'ghost',onclick:showSignup},'สมัครใหม่'),
         h('button',{class:'ghost',onclick:async()=>{try{await signInWithPopup(auth,new GoogleAuthProvider())}catch(e){err.textContent=authMsg(e)}}},'ใช้ Google'))));
@@ -649,7 +675,7 @@ function showSignup(){
   show(h('div',{class:'bar'},h('h1',{},'สมัครเป็นลูกบ้าน'),h('button',{class:'ghost sm',onclick:showLogin},'‹ กลับ')),
     h('div',{class:'card'},
       h('label',{},'ชื่อ-นามสกุล'),name,h('label',{},'บ้านเลขที่'),house,
-      h('label',{},'เบอร์โทร (ใช้เป็นชื่อผู้ใช้)'),phone,
+      h('label',{},'เบอร์โทร (ใช้เป็นชื่อผู้ใช้)'),phone,h('p',{class:'meta'},'ลืมรหัสผ่าน? สมัครใหม่ด้วยเบอร์เดิมและตั้งรหัสผ่านใหม่ได้ ผู้ดูแลจะลบบัญชีเก่าให้'),
       h('label',{},'ตั้งรหัสผ่าน (6 ตัวพอดี)'),pwf.row,h('label',{},'ยืนยันรหัสผ่าน'),pwf2.row,
       h('label',{},'รหัสหมู่บ้าน'),code,
       h('button',{onclick:async()=>{
@@ -660,7 +686,7 @@ function showSignup(){
         if(pw.value!==pw2.value){err.textContent='รหัสผ่านสองช่องไม่ตรงกัน';return}
         signingUp=true;
         try{
-          const c=await createUserWithEmailAndPassword(auth,toEmail(phone.value),pw.value);
+          const c=await createPhoneUser(phone.value,pw.value);
           user=c.user;
           await createProfile(user.uid,{name:name.value.trim(),house:house.value.trim(),phone:phone.value.replace(/\D/g,''),email:''},code.value.trim());
           signingUp=false;watchProfile();
@@ -931,7 +957,7 @@ async function lockScreen(body){
     h('p',{class:'meta'},'ใส่รหัสของผู้มีสิทธิ์เพื่อดู'),pin,h('button',{onclick:go},'ปลดล็อก'),msg));
 }
 
-function memberCard(d){
+function memberCard(d,dupOld){
   const u=d.data(),self=d.id===user.uid,ref=doc(db,'users',d.id);
   const locked=u.role==='admin'&&!isOwner();
   const name=h('input',{value:u.name||''}),house=h('input',{value:u.house||''}),phone=h('input',{type:'tel',value:u.phone||''});
@@ -963,7 +989,7 @@ function memberCard(d){
     }
   }
   return h('div',{class:'card'},
-    h('h3',{},u.name||'(ไม่มีชื่อ)',RL[u.role]?h('span',{class:'badge gray',style:'margin-left:8px'},RL[u.role]):null,self?h('span',{class:'badge gray',style:'margin-left:6px'},'คุณ'):null),
+    h('h3',{},u.name||'(ไม่มีชื่อ)',RL[u.role]?h('span',{class:'badge gray',style:'margin-left:8px'},RL[u.role]):null,self?h('span',{class:'badge gray',style:'margin-left:6px'},'คุณ'):null,dupOld?h('span',{class:'badge',style:'margin-left:6px'},'⚠️ บัญชีเก่า (เบอร์ซ้ำ)'):null),
     h('div',{class:'meta'},'บ้าน '+(u.house||'-')+' · โทร '+(u.phone||'-')+(u.email?' · '+u.email:'')),
     h('div',{class:'meta'},'สมัครเมื่อ '+when(u.createdAt)),
     btns.length?h('div',{class:'row',style:'margin-top:10px;flex-wrap:wrap'},...btns):null,form);
@@ -986,9 +1012,13 @@ function renderMembers(body){
   let all=[];
   const paintMem=()=>{
     const k=q.value.trim().toLowerCase();
+    const byPhone=new Map();
+    all.forEach(d=>{const ph=String(d.data().phone||'').replace(/\D/g,'');if(!ph)return;if(!byPhone.has(ph))byPhone.set(ph,[]);byPhone.get(ph).push(d)});
+    const dupOld=new Set();
+    byPhone.forEach(a=>{if(a.length>1){a.sort((x,y)=>(y.data().createdAt?.toMillis?.()||1e15)-(x.data().createdAt?.toMillis?.()||1e15));a.slice(1).forEach(d=>dupOld.add(d.id))}});
     const arr=all.filter(d=>{const u=d.data();return !k||[u.name,u.house,u.phone].join(' ').toLowerCase().includes(k)})
       .sort((a,b)=>String(a.data().house||'').localeCompare(String(b.data().house||''),'th',{numeric:true}));
-    mem.replaceChildren(h('p',{class:'meta'},'ทั้งหมด '+all.length+' คน'+(k?' · พบ '+arr.length:'')),...(arr.length?arr.map(memberCard):[h('p',{class:'center meta'},'ไม่พบสมาชิก')]));
+    mem.replaceChildren(h('p',{class:'meta'},'ทั้งหมด '+all.length+' คน'+(k?' · พบ '+arr.length:'')),...(arr.length?arr.map(d=>memberCard(d,dupOld.has(d.id))):[h('p',{class:'center meta'},'ไม่พบสมาชิก')]));
   };
   q.addEventListener('input',paintMem);
   unsubs.push(onSnapshot(query(collection(db,'users'),where('approved','==',false)),snap=>{
