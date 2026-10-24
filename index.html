@@ -53,6 +53,20 @@ label{font-weight:600;font-size:16px}
 .chat-in input{margin:0}
 .nomsg{color:var(--mut);text-align:center;margin:auto}
 .pill{position:absolute;left:50%;transform:translateX(-50%);bottom:74px;min-height:36px;padding:4px 14px;font-size:14px;border-radius:99px;box-shadow:0 2px 8px rgba(0,0,0,.35)}
+.bub .who{color:hsl(var(--h,200) 62% 30%);display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+@media(prefers-color-scheme:dark){.bub .who{color:hsl(var(--h,200) 70% 75%)}}
+.bub.adm .who{color:var(--amber)}
+.quote{border-left:3px solid currentColor;padding:2px 8px;margin:3px 0 5px;font-size:14px;cursor:pointer;border-radius:4px;background:rgba(127,127,127,.14);opacity:.9}
+.bub.flash{outline:3px solid var(--amber)}
+.rcount{font-size:12px;opacity:.85}
+.replybar{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:6px 12px;background:var(--card);border-top:1px solid var(--line);font-size:14px}
+.badge{display:inline-block;min-width:22px;text-align:center;padding:0 7px;border-radius:99px;background:var(--red);color:#fff;font:500 13px Kanit,sans-serif;margin-left:6px;line-height:1.5}
+.badge.gray{background:var(--line);color:var(--ink);margin:0}
+.chip{display:inline-block;padding:1px 10px;border-radius:99px;font:500 14px Kanit,sans-serif;color:#fff}
+.chip.new{background:var(--red)}.chip.accepted{background:var(--amber)}.chip.done{background:var(--ok)}
+.files{display:flex;flex-direction:column;gap:6px;margin-top:8px}
+.files img{max-width:100%;border-radius:10px;margin-top:6px}
+details.card summary{cursor:pointer;font-family:Kanit,sans-serif;font-weight:500}
 </style>
 </head>
 <body>
@@ -60,7 +74,7 @@ label{font-weight:600;font-size:16px}
 <script type="module">
 import{initializeApp}from"https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import{getAuth,GoogleAuthProvider,signInWithPopup,signOut,onAuthStateChanged,createUserWithEmailAndPassword,signInWithEmailAndPassword}from"https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
-import{getFirestore,doc,getDoc,getDocs,setDoc,updateDoc,deleteDoc,addDoc,collection,query,where,orderBy,limit,onSnapshot,serverTimestamp,Bytes}from"https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+import{getFirestore,doc,getDoc,getDocs,setDoc,updateDoc,deleteDoc,addDoc,collection,query,where,orderBy,limit,onSnapshot,serverTimestamp,Bytes,writeBatch,increment}from"https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
 const app=initializeApp({
   apiKey:"AIzaSyDRAIAlliLTUAxYTgn0iIiyrCM_0D3Zxjo",
@@ -198,7 +212,8 @@ async function saveRecording(r,title){
     throw e;
   }
 }
-async function removeAnn(id,n){
+async function removeAnn(id,n,files){
+  await delFiles(files);
   for(let i=0;i<n;i++)await deleteDoc(doc(db,'live','rec_'+id+'_'+i)).catch(()=>{});
   const ms=await getDocs(collection(db,'announcements',id,'messages'));
   await Promise.all(ms.docs.map(m=>deleteDoc(m.ref)));
@@ -242,45 +257,141 @@ async function stopLive(){
 }
 
 const hhmm=t=>{const d=t?.toDate?.();return d?d.toLocaleTimeString('th-TH',{hour:'2-digit',minute:'2-digit'}):'…'};
-function chatBox(id,o={}){
+const hue=u=>{let x=0;for(const c of u||'')x=(x*31+c.charCodeAt(0))%360;return x};
+const seenGet=id=>{try{return +(localStorage.getItem('sc_'+id)||0)}catch(_){return 0}};
+const seenSet=(id,n)=>{try{localStorage.setItem('sc_'+id,String(n))}catch(_){}};
+const csGet=id=>{try{return localStorage.getItem('cs_'+id)||''}catch(_){return ''}};
+const csSet=(id,v)=>{try{localStorage.setItem('cs_'+id,v)}catch(_){}};
+const unreadOf=d=>Math.max(0,(d.data().msgCount||0)-seenGet(d.id));
+
+const rid=()=>Math.random().toString(36).slice(2,10)+Date.now().toString(36);
+async function shrinkImage(file){
+  try{
+    const bmp=await createImageBitmap(file);
+    const sc=Math.min(1,1280/Math.max(bmp.width,bmp.height));
+    const c=document.createElement('canvas');c.width=Math.round(bmp.width*sc);c.height=Math.round(bmp.height*sc);
+    c.getContext('2d').drawImage(bmp,0,0,c.width,c.height);
+    return await new Promise(r=>c.toBlob(r,'image/jpeg',0.72));
+  }catch(_){throw new Error('อ่านภาพ '+file.name+' ไม่ได้')}
+}
+async function delFiles(fs){for(const f of fs||[])for(let i=0;i<f.parts;i++)await deleteDoc(doc(db,'blobs',f.id+'_'+i)).catch(()=>{})}
+async function putFiles(list){
+  const out=[];let total=0;
+  try{
+    for(const f of list){
+      let blob=f,type=f.type||'application/octet-stream',name=f.name;
+      if(type.startsWith('image/')){blob=await shrinkImage(f);type='image/jpeg';name=name.replace(/\.[^.]+$/,'')+'.jpg'}
+      if(blob.size>2.5*1048576)throw new Error(name+' ใหญ่เกิน 2.5 MB');
+      total+=blob.size;if(total>4*1048576)throw new Error('ไฟล์รวมกันใหญ่เกิน 4 MB');
+      const buf=new Uint8Array(await blob.arrayBuffer());
+      const id=rid(),SZ=700000,n=Math.max(1,Math.ceil(buf.length/SZ));
+      const meta={id,name,type,size:blob.size,parts:n};
+      out.push(meta);
+      for(let i=0;i<n;i++)await setDoc(doc(db,'blobs',id+'_'+i),{uid:user.uid,i,data:Bytes.fromUint8Array(buf.slice(i*SZ,(i+1)*SZ))});
+    }
+    return out;
+  }catch(e){await delFiles(out);throw e}
+}
+const blobUrls=new Map();
+async function loadFile(f){
+  if(blobUrls.has(f.id))return blobUrls.get(f.id);
+  const ds=await Promise.all(Array.from({length:f.parts},(_,i)=>getDoc(doc(db,'blobs',f.id+'_'+i))));
+  if(ds.some(d=>!d.exists()))throw new Error('ไฟล์ไม่ครบ');
+  const u=URL.createObjectURL(new Blob(ds.map(d=>d.data().data.toUint8Array()),{type:f.type}));
+  blobUrls.set(f.id,u);return u;
+}
+function fileView(files){
+  if(!files||!files.length)return null;
+  const box=h('div',{class:'files',onclick:e=>e.stopPropagation()});
+  files.forEach(f=>{
+    const kb=f.size>1048576?(f.size/1048576).toFixed(1)+' MB':Math.max(1,Math.round(f.size/1024))+' KB';
+    const isImg=(f.type||'').startsWith('image/');
+    const slot=h('div'),err=h('span',{class:'err'});
+    const btn=h('button',{class:'ghost sm'},(isImg?'🖼 ดูภาพ: ':'📄 ดาวน์โหลด: ')+f.name+' ('+kb+')');
+    btn.onclick=async()=>{
+      btn.disabled=true;err.textContent='';
+      try{
+        const u=await loadFile(f);
+        if(isImg){slot.replaceChildren(h('img',{src:u,alt:f.name}));btn.style.display='none'}
+        else{const a=h('a',{href:u,download:f.name});document.body.append(a);a.click();a.remove()}
+      }catch(e){err.textContent=e.message}
+      btn.disabled=false;
+    };
+    box.append(h('div',{},btn,err),slot);
+  });
+  return box;
+}
+
+function chatBox(path,o={}){
+  const counting=o.count!==false&&path[0]==='announcements';
   const list=h('div',{class:'chat-list'});
   const pill=h('button',{class:'pill',style:'display:none',onclick:()=>{list.scrollTop=list.scrollHeight;pill.style.display='none'}},'ข้อความใหม่ ↓');
   list.addEventListener('scroll',()=>{if(list.scrollHeight-list.scrollTop-list.clientHeight<40)pill.style.display='none'});
   const inp=h('input',{placeholder:'พิมพ์ข้อความ…',maxlength:'300',enterkeyhint:'send'});
   const err=h('div',{class:'err',style:'padding:0 12px'});
-  let last=0,first=true;
+  const rbar=h('div',{class:'replybar',style:'display:none'});
+  let last=0,first=true,replyTo=null;
+  const setReply=m=>{
+    replyTo=m;
+    if(!m){rbar.style.display='none';return}
+    rbar.replaceChildren(h('span',{},'↩ ตอบ '+m.name+': '+m.text.slice(0,40)),h('button',{class:'ghost sm',onclick:()=>setReply(null)},'ยกเลิก'));
+    rbar.style.display='flex';inp.focus();
+  };
   const send=async()=>{
     const v=inp.value.trim();if(!v)return;
     if(Date.now()-last<3000){err.textContent='รอสักครู่ก่อนส่งข้อความถัดไป';return}
     last=Date.now();err.textContent='';
-    try{await addDoc(collection(db,'announcements',id,'messages'),{uid:user.uid,name:profile.name,house:profile.house,text:v,createdAt:serverTimestamp()});inp.value='';inp.focus()}
-    catch(e){err.textContent=e.message}
+    try{
+      const b=writeBatch(db),mref=doc(collection(db,...path,'messages'));
+      const m={uid:user.uid,name:profile.name,house:profile.house,role:profile.role||'resident',text:v,createdAt:serverTimestamp()};
+      if(replyTo)m.replyTo=replyTo;
+      b.set(mref,m);
+      if(counting)b.update(doc(db,...path),{msgCount:increment(1),lastMsgAt:serverTimestamp(),lastMsgName:profile.name,lastMsgUid:user.uid});
+      await b.commit();
+      inp.value='';setReply(null);inp.focus();
+    }catch(e){err.textContent=e.message}
   };
   inp.addEventListener('keydown',e=>{if(e.key==='Enter')send()});
-  const bubble=d=>{
-    const m=d.data(),me=m.uid===user.uid,host=!!o.host&&m.uid===o.host;
-    return h('div',{class:'bub'+(me?' me':'')+(host?' adm':'')},
-      me?null:h('div',{class:'who'},m.name+' · บ้าน '+m.house+(host?' · ผู้ประกาศ':'')),
-      h('div',{class:'txt'},m.text),
-      h('div',{class:'t'},hhmm(m.createdAt),isAdmin()?h('button',{class:'x',onclick:()=>deleteDoc(d.ref)},'ลบ'):null));
+  const del=async d=>{
+    const b=writeBatch(db);b.delete(d.ref);
+    if(counting)b.update(doc(db,...path),{msgCount:increment(-1)});
+    await b.commit().catch(e=>{err.textContent=e.message});
   };
-  const off=onSnapshot(query(collection(db,'announcements',id,'messages'),orderBy('createdAt','asc'),limit(200)),snap=>{
+  const jump=id=>{
+    const el=list.querySelector('[data-id="'+id+'"]');if(!el)return;
+    list.scrollTop=Math.max(0,el.offsetTop-list.clientHeight/2);
+    el.classList.add('flash');setTimeout(()=>el.classList.remove('flash'),1600);
+  };
+  const bubble=(d,replies)=>{
+    const m=d.data(),me=m.uid===user.uid,adm=m.role==='admin'||(!!o.host&&m.uid===o.host);
+    const n=replies.get(d.id)||0;
+    return h('div',{class:'bub'+(me?' me':'')+(adm?' adm':''),'data-id':d.id},
+      me?null:h('div',{class:'who',style:'--h:'+hue(m.uid)},m.name+' · บ้าน '+m.house,m.role==='admin'?h('span',{class:'badge gray'},'ผู้ดูแล'):null),
+      m.replyTo?h('div',{class:'quote',onclick:()=>jump(m.replyTo.id)},'↩ '+m.replyTo.name+' (บ้าน '+m.replyTo.house+'): '+m.replyTo.text):null,
+      h('div',{class:'txt'},m.text),
+      h('div',{class:'t'},n?h('span',{class:'rcount'},'💬 '+n+' ตอบ'):null,hhmm(m.createdAt),
+        h('button',{class:'x',onclick:()=>setReply({id:d.id,name:m.name,house:m.house,text:m.text.slice(0,80)})},'↩ ตอบ'),
+        isAdmin()?h('button',{class:'x',onclick:()=>del(d)},'ลบ'):null));
+  };
+  const off=onSnapshot(query(collection(db,...path,'messages'),orderBy('createdAt','asc'),limit(500)),snap=>{
     const prev=list.scrollTop;
     const near=list.scrollHeight-list.scrollTop-list.clientHeight<80;
     const mine=snap.docs.length>0&&snap.docs[snap.docs.length-1].data().uid===user.uid;
-    list.replaceChildren(...(snap.empty?[h('div',{class:'nomsg'},'ยังไม่มีข้อความ พิมพ์ได้เลย')]:snap.docs.map(bubble)));
+    const replies=new Map();
+    snap.docs.forEach(d=>{const r=d.data().replyTo;if(r)replies.set(r.id,(replies.get(r.id)||0)+1)});
+    list.replaceChildren(...(snap.empty?[h('div',{class:'nomsg'},'ยังไม่มีข้อความ พิมพ์ได้เลย')]:snap.docs.map(d=>bubble(d,replies))));
     if(first||near||mine){list.scrollTop=list.scrollHeight;pill.style.display='none'}
     else{list.scrollTop=prev;pill.style.display=''}
     first=false;
   },e=>{list.replaceChildren(h('div',{class:'nomsg'},e.message))});
-  return{off,el:h('div',{class:'chat'},list,pill,h('div',{class:'chat-in'},inp,h('button',{onclick:send},'ส่ง')),err)};
+  return{off,el:h('div',{class:'chat'},list,pill,rbar,h('div',{class:'chat-in'},inp,h('button',{onclick:send},'ส่ง')),err)};
 }
 function chatSync(hold,cs,d){
   const id=liveOn(d)&&d.announcementId;
   if(!id){if(cs.off){cs.off();cs.off=null;cs.id=null}hold.replaceChildren();return}
   if(cs.id===id)return;
   if(cs.off)cs.off();
-  const cb=chatBox(id,{host:d.startedBy});
+  const cb=chatBox(['announcements',id],{host:d.startedBy,count:false});
   cs.id=id;cs.off=cb.off;
   hold.replaceChildren(h('h3',{style:'margin:14px 0 8px'},'แชทสด'),cb.el);
 }
@@ -512,41 +623,174 @@ function showPending(){
     h('p',{},'ส่งคำขอแล้ว เมื่อผู้ดูแลอนุมัติ หน้านี้จะเปลี่ยนให้อัตโนมัติ'),logoutBtn()));
 }
 
+const CAT_DEF=['ไฟฟ้า/ไฟถนน','น้ำประปา','ถนน/ทางเท้า','ขยะ/ความสะอาด','เสียงรบกวน','ความปลอดภัย','สัตว์/แมลง','อื่น ๆ'];
+let cats=CAT_DEF;
+const ST={new:'รอรับเรื่อง',accepted:'กำลังดำเนินการ',done:'เสร็จแล้ว'};
+async function loadCats(){try{const x=await getDoc(doc(db,'config','cats'));if(x.exists()&&x.data().list&&x.data().list.length)cats=x.data().list}catch(_){}}
+
 function showMain(tab='news'){
   const subs=unsubs.slice(0,1);unsubs.forEach((u,i)=>{if(i>0)u()});unsubs=subs;
-  const list=h('div'),body=h('div');
-  const tabs=h('div',{class:'tabs'},
-    h('button',{class:tab==='news'?'':'ghost',onclick:()=>showMain('news')},'ประกาศ'),
-    isAdmin()?h('button',{class:tab==='members'?'':'ghost',onclick:()=>showMain('members')},'สมาชิก'):null);
+  const body=h('div');
+  const nb=h('span',{class:'badge',style:'display:none'}),cb=h('span',{class:'badge',style:'display:none'});
+  const tb=(k,label,bd)=>h('button',{class:tab===k?'':'ghost',onclick:()=>showMain(k)},label,bd);
   show(h('div',{class:'bar'},h('div',{},h('h1',{},'ประกาศหมู่บ้าน'),h('div',{class:'who'},profile.name+' · บ้าน '+profile.house)),logoutBtn()),
-    tabs,body);
-  if(tab==='members')return renderMembers(body);
-  body.append(isAdmin()?liveAdminCard():liveListenCard());
-  if(isAdmin())body.append(composer());
-  body.append(list);
+    h('div',{class:'tabs'},tb('news','ประกาศ',nb),tb('cmp','แจ้งปัญหา',cb),isAdmin()?tb('members','สมาชิก'):null),body);
+  const setB=(el,n)=>{el.textContent=n>99?'99+':String(n);el.style.display=n?'':'none'};
+  let anns=[],cmps=[],paintTab=()=>{};
+  const paintBadges=()=>{
+    const un=anns.reduce((t,d)=>t+unreadOf(d),0);
+    const cn=isAdmin()?cmps.filter(d=>d.data().status==='new').length:cmps.filter(d=>{const c=d.data();return c.status!=='new'&&csGet(d.id)!==c.status}).length;
+    setB(nb,un);setB(cb,cn);
+    document.title=(un+cn?'('+(un+cn)+') ':'')+'ประกาศหมู่บ้าน';
+  };
   unsubs.push(onSnapshot(query(collection(db,'announcements'),orderBy('createdAt','desc'),limit(30)),snap=>{
     if(isAdmin()&&!liveRoom)snap.docs.forEach(d=>{const a=d.data();
       if(a.type==='live'&&d.id!==liveAnnId&&d.id!==curLiveId&&a.createdAt?.toDate&&Date.now()-a.createdAt.toDate().getTime()>120000)cleanupLive(d.id)});
-    const docs=snap.docs.filter(d=>d.data().type!=='live');
-    if(!docs.length){list.replaceChildren(h('p',{class:'center meta'},'ยังไม่มีประกาศ'));return}
-    list.replaceChildren(...docs.map(d=>{const a=d.data();
-      return h('div',{class:'card item '+a.level,onclick:()=>showThread(d.id,a)},
-        h('span',{class:'tag '+a.level},LV[a.level]||'ทั่วไป'),a.type==='audio'?h('span',{class:'tag'},'🎧 เสียงบันทึก'):null,h('h3',{},a.title),
-        h('div',{},a.text),h('div',{class:'meta'},when(a.createdAt)+' · แตะเพื่อถามหรือตอบ'),a.type==='audio'?audioPlayer(d.id,a):null,isAdmin()?h('button',{class:'ghost sm',style:'margin-top:8px',onclick:e=>{e.stopPropagation();if(confirm('ลบประกาศนี้ทิ้งถาวร?'))removeAnn(d.id,a.audioParts||0)}},'ลบ'):null)}));
+    anns=snap.docs.filter(d=>d.data().type!=='live');
+    paintBadges();if(tab==='news')paintTab();
   },showError));
+  unsubs.push(onSnapshot(isAdmin()?query(collection(db,'complaints'),orderBy('createdAt','desc'),limit(100)):query(collection(db,'complaints'),where('uid','==',user.uid)),snap=>{
+    cmps=snap.docs;paintBadges();if(tab==='cmp')paintTab();
+  },()=>{}));
+
+  if(tab==='members')return renderMembers(body);
+  if(tab==='news'){
+    const list=h('div');
+    body.append(isAdmin()?liveAdminCard():liveListenCard());
+    if(isAdmin())body.append(composer());
+    body.append(list);
+    paintTab=()=>renderNews(list,anns);
+    return;
+  }
+  body.append(h('p',{class:'meta'},'กำลังโหลด…'));
+  loadCats().then(()=>{
+    const listC=h('div'),fbar=h('div',{class:'row',style:'flex-wrap:wrap;margin-bottom:12px'});let flt='all';
+    body.replaceChildren(...(isAdmin()?[catEditor(),fbar]:[cmpForm(),h('h3',{style:'margin:14px 0 8px'},'เรื่องของฉัน')]),listC);
+    paintTab=()=>{
+      let arr=cmps.slice();
+      if(isAdmin()){
+        const cnt=k=>cmps.filter(d=>d.data().status===k).length;
+        fbar.replaceChildren(...[['all','ทั้งหมด ('+cmps.length+')'],['new','รอรับ ('+cnt('new')+')'],['accepted','ดำเนินการ ('+cnt('accepted')+')'],['done','เสร็จ ('+cnt('done')+')']]
+          .map(([k,l])=>h('button',{class:'sm '+(flt===k?'':'ghost'),onclick:()=>{flt=k;paintTab()}},l)));
+        if(flt!=='all')arr=arr.filter(d=>d.data().status===flt);
+      }else arr.sort((a,b)=>(b.data().createdAt?.toMillis?.()||1e15)-(a.data().createdAt?.toMillis?.()||1e15));
+      listC.replaceChildren(...(arr.length?arr.map(d=>complaintCard(d)):[h('p',{class:'center meta'},isAdmin()?'ไม่มีเรื่อง':'ยังไม่มีเรื่องที่แจ้ง')]));
+      if(!isAdmin()){cmps.forEach(d=>csSet(d.id,d.data().status));paintBadges()}
+    };
+    paintTab();
+  });
+}
+
+function renderNews(list,anns){
+  if(!anns.length){list.replaceChildren(h('p',{class:'center meta'},'ยังไม่มีประกาศ'));return}
+  list.replaceChildren(...anns.map(d=>{
+    const a=d.data(),un=unreadOf(d),n=Math.max(0,a.msgCount||0);
+    return h('div',{class:'card item '+a.level,onclick:()=>showThread(d.id,a)},
+      h('span',{class:'tag '+a.level},LV[a.level]||'ทั่วไป'),a.type==='audio'?h('span',{class:'tag'},'🎧 เสียงบันทึก'):null,
+      h('h3',{},a.title),h('div',{},a.text),fileView(a.files),a.type==='audio'?audioPlayer(d.id,a):null,
+      h('div',{class:'meta',style:'margin-top:8px'},when(a.createdAt)+' · แตะเพื่อถามหรือตอบ'),
+      h('div',{class:'meta'},'💬 '+n+' ข้อความ',un?h('span',{class:'badge'},'ใหม่ '+un):null,
+        a.lastMsgAt?.toDate?' · ล่าสุด '+hhmm(a.lastMsgAt)+' โดย '+(a.lastMsgName||''):''),
+      isAdmin()?h('button',{class:'ghost sm',style:'margin-top:8px',onclick:e=>{e.stopPropagation();if(confirm('ลบประกาศนี้ทิ้งถาวร (รวมไฟล์และข้อความ)?'))removeAnn(d.id,a.audioParts||0,a.files).catch(x=>alert(x.message))}},'ลบประกาศ'):null);
+  }));
 }
 
 function composer(){
   const t=h('input',{placeholder:'หัวข้อ'});
   const x=h('textarea',{rows:3,placeholder:'รายละเอียด'});
   const l=h('select',{},...Object.entries(LV).map(([k,v])=>h('option',{value:k},v)));
-  const err=h('p',{class:'err'});
+  const fi=h('input',{type:'file',multiple:'',accept:'image/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt'});
+  const err=h('p',{class:'err'}),btn=h('button',{},'ประกาศ');
+  btn.onclick=async()=>{
+    if(!t.value.trim()){err.textContent='กรุณากรอกหัวข้อ';return}
+    btn.disabled=true;err.textContent=fi.files.length?'กำลังอัปโหลดไฟล์…':'';
+    let files=[];
+    try{
+      files=await putFiles([...fi.files]);
+      await addDoc(collection(db,'announcements'),{title:t.value.trim(),text:x.value.trim(),level:l.value,type:'text',files,createdBy:user.uid,createdAt:serverTimestamp()});
+      t.value='';x.value='';fi.value='';err.textContent='';
+    }catch(e){await delFiles(files);err.textContent=e.message}
+    btn.disabled=false;
+  };
   return h('div',{class:'card'},h('h3',{},'สร้างประกาศ'),t,x,l,
-    h('button',{onclick:async()=>{
-      if(!t.value.trim()){err.textContent='กรุณากรอกหัวข้อ';return}
-      try{await addDoc(collection(db,'announcements'),{title:t.value.trim(),text:x.value.trim(),level:l.value,type:'text',createdBy:user.uid,createdAt:serverTimestamp()});
-        t.value='';x.value='';err.textContent=''}catch(e){err.textContent=e.message}
-    }},'ประกาศ'),err);
+    h('label',{},'แนบภาพ/เอกสาร (รวมไม่เกิน 4 MB)'),fi,btn,err);
+}
+
+function cmpForm(){
+  const cat=h('select',{},...cats.map(c=>h('option',{value:c},c)));
+  const t=h('input',{placeholder:'หัวข้อเรื่อง เช่น ไฟถนนหน้าบ้าน 12 ดับ'});
+  const x=h('textarea',{rows:3,placeholder:'รายละเอียด / จุดที่เกิดเหตุ'});
+  const fi=h('input',{type:'file',multiple:'',accept:'image/*'});
+  const msg=h('p',{class:'meta'}),btn=h('button',{},'ส่งเรื่อง');
+  btn.onclick=async()=>{
+    if(!t.value.trim()){msg.textContent='กรุณากรอกหัวข้อเรื่อง';return}
+    btn.disabled=true;msg.textContent=fi.files.length?'กำลังอัปโหลดภาพ…':'กำลังส่ง…';
+    let files=[];
+    try{
+      files=await putFiles([...fi.files]);
+      const r=await addDoc(collection(db,'complaints'),{uid:user.uid,name:profile.name,house:profile.house,phone:profile.phone||'',cat:cat.value,title:t.value.trim(),text:x.value.trim(),files,status:'new',createdAt:serverTimestamp()});
+      csSet(r.id,'new');t.value='';x.value='';fi.value='';
+      msg.textContent='✅ ส่งเรื่องแล้ว ผู้ดูแลจะรับเรื่องและแจ้งผลที่นี่';
+    }catch(e){await delFiles(files);msg.textContent='ส่งไม่สำเร็จ: '+e.message}
+    btn.disabled=false;
+  };
+  return h('div',{class:'card'},h('h3',{},'แจ้งปัญหา'),h('label',{},'หัวข้อที่แจ้ง'),cat,t,x,h('label',{},'แนบภาพ (ถ้ามี)'),fi,btn,msg);
+}
+
+function catEditor(){
+  const ta=h('textarea',{rows:6});ta.value=cats.join('\n');
+  const msg=h('p',{class:'meta'});
+  return h('details',{class:'card'},h('summary',{},'จัดการหัวข้อที่ลูกบ้านแจ้งได้'),
+    h('p',{class:'meta'},'พิมพ์หัวข้อละ 1 บรรทัด'),ta,
+    h('button',{class:'sm',onclick:async()=>{
+      const list=ta.value.split('\n').map(v=>v.trim()).filter(Boolean).slice(0,20);
+      if(!list.length){msg.textContent='ต้องมีอย่างน้อย 1 หัวข้อ';return}
+      try{await setDoc(doc(db,'config','cats'),{list});cats=list;msg.textContent='บันทึกแล้ว'}catch(e){msg.textContent=e.message}
+    }},'บันทึก'),msg);
+}
+
+async function removeCmp(id,files){
+  await delFiles(files);
+  const ms=await getDocs(collection(db,'complaints',id,'messages'));
+  await Promise.all(ms.docs.map(m=>deleteDoc(m.ref)));
+  await deleteDoc(doc(db,'complaints',id));
+}
+
+function complaintCard(d,inDetail){
+  const c=d.data(),ref=doc(db,'complaints',d.id);
+  const rep=h('textarea',{rows:3,placeholder:'รายงานผลการแก้ไข',style:'display:none'});
+  const sendRep=h('button',{class:'sm',style:'display:none'},'ส่งรายงานและปิดเรื่อง');
+  const msg=h('p',{class:'err'});
+  const act=[];
+  if(isAdmin()&&c.status==='new')act.push(h('button',{class:'sm',onclick:()=>updateDoc(ref,{status:'accepted',acceptedBy:user.uid,acceptedByName:profile.name,acceptedAt:serverTimestamp()}).catch(e=>{msg.textContent=e.message})},'✋ รับเรื่อง'));
+  if(isAdmin()&&c.status==='accepted')act.push(h('button',{class:'sm',onclick:()=>{rep.style.display='';sendRep.style.display=''}},'📝 รายงานผล / ปิดเรื่อง'));
+  sendRep.onclick=async()=>{
+    if(!rep.value.trim()){msg.textContent='กรุณาเขียนรายงานผล';return}
+    try{await updateDoc(ref,{status:'done',result:rep.value.trim(),doneBy:user.uid,doneByName:profile.name,doneAt:serverTimestamp()})}
+    catch(e){msg.textContent=e.message}
+  };
+  if(!inDetail)act.push(h('button',{class:'ghost sm',onclick:()=>showComplaint(d.id)},'💬 คุยเรื่องนี้'));
+  if(isAdmin())act.push(h('button',{class:'ghost sm',onclick:()=>{if(confirm('ลบเรื่องนี้ทิ้งถาวร?'))removeCmp(d.id,c.files).then(()=>{if(inDetail)showMain('cmp')}).catch(e=>alert(e.message))}},'ลบ'));
+  return h('div',{class:'card'},
+    h('span',{class:'chip '+c.status},ST[c.status]||c.status),h('span',{class:'tag',style:'margin-left:6px'},c.cat),
+    h('h3',{style:'margin-top:6px'},c.title),h('div',{},c.text),fileView(c.files),
+    h('div',{class:'meta'},'แจ้งโดย '+c.name+' · บ้าน '+c.house+(isAdmin()&&c.phone?' · โทร '+c.phone:'')+' · '+when(c.createdAt)),
+    c.acceptedByName?h('div',{class:'meta'},'✋ รับเรื่องโดย '+c.acceptedByName+' · '+when(c.acceptedAt)):null,
+    c.status==='done'?h('div',{class:'card',style:'margin:8px 0 0;border-color:var(--ok)'},h('b',{},'ผลการดำเนินการ'),h('div',{},c.result||''),h('div',{class:'meta'},'โดย '+(c.doneByName||'')+' · '+when(c.doneAt))):null,
+    rep,sendRep,msg,
+    h('div',{class:'row',style:'margin-top:10px;flex-wrap:wrap'},...act));
+}
+
+function showComplaint(id){
+  const subs=unsubs.slice(0,1);unsubs.forEach((u,i)=>{if(i>0)u()});unsubs=subs;
+  const holder=h('div'),cbx=chatBox(['complaints',id],{});
+  unsubs.push(cbx.off);
+  unsubs.push(onSnapshot(doc(db,'complaints',id),x=>{
+    if(!x.exists()){showMain('cmp');return}
+    holder.replaceChildren(complaintCard(x,true));
+  },showError));
+  show(h('div',{class:'bar'},h('button',{class:'ghost sm',onclick:()=>showMain('cmp')},'‹ กลับ'),logoutBtn()),
+    holder,h('h3',{style:'margin:14px 0 8px'},'พูดคุยเรื่องนี้'),cbx.el);
 }
 
 function renderMembers(body){
@@ -564,9 +808,11 @@ function renderMembers(body){
 
 function showThread(id,a){
   const subs=unsubs.slice(0,1);unsubs.forEach((u,i)=>{if(i>0)u()});unsubs=subs;
-  const cb=chatBox(id);unsubs.push(cb.off);
+  const cb=chatBox(['announcements',id],{});unsubs.push(cb.off);
+  unsubs.push(onSnapshot(doc(db,'announcements',id),x=>{if(x.exists())seenSet(id,x.data().msgCount||0)},()=>{}));
   show(h('div',{class:'bar'},h('button',{class:'ghost sm',onclick:()=>showMain()},'‹ กลับ'),logoutBtn()),
-    h('div',{class:'card item '+a.level},h('span',{class:'tag '+a.level},LV[a.level]||'ทั่วไป'),h('h3',{},a.title),h('div',{},a.text),h('div',{class:'meta'},when(a.createdAt))),
+    h('div',{class:'card item '+a.level},h('span',{class:'tag '+a.level},LV[a.level]||'ทั่วไป'),h('h3',{},a.title),h('div',{},a.text),
+      fileView(a.files),a.type==='audio'?audioPlayer(id,a):null,h('div',{class:'meta'},when(a.createdAt))),
     h('h3',{style:'margin:14px 0 8px'},'ถาม-ตอบ'),cb.el);
 }
 </script>
