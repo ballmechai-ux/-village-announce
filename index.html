@@ -5,6 +5,12 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="theme-color" content="#17795f" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0e1814" media="(prefers-color-scheme: dark)">
+<link rel="preconnect" href="https://www.gstatic.com" crossorigin>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="modulepreload" href="https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js">
+<link rel="modulepreload" href="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js">
+<link rel="modulepreload" href="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js">
 <link rel="manifest" href="manifest.json">
 <link rel="icon" type="image/png" href="icon-192.png">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
@@ -163,7 +169,7 @@ installBar();
 if('serviceWorker' in navigator)addEventListener('load',()=>navigator.serviceWorker.register('./sw.js').catch(()=>{}));
 
 onAuthStateChanged(auth,async u=>{
-  clean();stopRooms();membersUnlock=0;user=u;profile=null;
+  clean();stopRooms();membersUnlock=0;delete root.dataset.main;user=u;profile=null;
   if(signingUp)return;
   if(!u)return showLogin();
   try{
@@ -190,16 +196,14 @@ async function loginPhone(phone,pw){
   const d=phone.replace(/\D/g,'');
   let first=1;try{first=+(localStorage.getItem('pv_'+d)||1)||1}catch(_){}
   first=Math.min(Math.max(first,1),MAXV);
-  const order=[first,...Array.from({length:MAXV},(_,i)=>i+1).filter(v=>v!==first)];
+  const save=v=>{try{localStorage.setItem('pv_'+d,String(v))}catch(_){}};
+  const tryV=v=>signInWithEmailAndPassword(auth,toEmail(phone,v),pw).then(()=>v);
   let last=null;
-  for(const v of order){
-    try{
-      await signInWithEmailAndPassword(auth,toEmail(phone,v),pw);
-      try{localStorage.setItem('pv_'+d,String(v))}catch(_){}
-      return;
-    }catch(e){last=e;if(e.code==='auth/too-many-requests'||e.code==='auth/network-request-failed')break}
-  }
-  throw last;
+  try{save(await tryV(first));return}
+  catch(e){last=e;if(e.code==='auth/too-many-requests'||e.code==='auth/network-request-failed')throw e}
+  const rest=Array.from({length:MAXV},(_,i)=>i+1).filter(v=>v!==first);
+  try{save(await Promise.any(rest.map(tryV)));return}
+  catch(agg){throw (agg.errors||[]).find(e=>e.code==='auth/too-many-requests')||last}
 }
 async function createPhoneUser(phone,pw){
   for(let v=1;v<=MAXV;v++){
