@@ -562,6 +562,7 @@ function liveAdminCard(){
         const a=await addDoc(collection(db,'announcements'),{title:ttl,text:'',level:'normal',type:'live',createdBy:user.uid,createdAt:serverTimestamp()});
         liveAnnId=a.id;
         await setDoc(doc(db,'live','current'),{active:true,title:ttl,announcementId:a.id,startedBy:user.uid,startedAt:serverTimestamp()});
+        notifyPush({type:'live',title:ttl});
         st.textContent='กำลังเชื่อมตู้ลำโพง… รอ 3 วินาที แล้วพูดได้เลย';
         setTimeout(()=>{if(liveRoom===room)st.textContent='🔴 ออกอากาศอยู่ พูดได้เลย'},3000);
       }
@@ -640,6 +641,56 @@ function showReceiver(){
     st.textContent='พร้อมรับเสียง — รอประกาศสด';
     unsubs.push(onSnapshot(doc(db,'live','current'),x=>{rxWant=liveOn(x.data());rxSync(st)},e=>{st.textContent='อ่านสถานะไม่ได้: '+e.message}));
   };
+}
+
+let pushDone=false;
+async function setupPush(ask){
+  try{
+    if(!('Notification' in window)||!('serviceWorker' in navigator))return 'unsupported';
+    if(pushDone&&Notification.permission==='granted')return 'ok';
+    const{getMessaging,getToken,isSupported}=await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-messaging.js');
+    if(!(await isSupported()))return 'unsupported';
+    if(Notification.permission==='default'&&ask)await Notification.requestPermission();
+    if(Notification.permission!=='granted')return Notification.permission;
+    const cfgp=await getDoc(doc(db,'config','push'));
+    const vapid=cfgp.exists()?cfgp.data().vapid:'';
+    if(!vapid)return 'ยังไม่ได้ตั้งค่ากุญแจ Push (แจ้งแอดมิน)';
+    const reg=await navigator.serviceWorker.ready;
+    const token=await getToken(getMessaging(app),{vapidKey:vapid,serviceWorkerRegistration:reg});
+    if(!token)return 'ไม่ได้รับโทเคน';
+    const idt=await user.getIdToken();
+    const r=await fetch(TOKEN_URL+'/register',{method:'POST',headers:{Authorization:'Bearer '+idt,'Content-Type':'application/json'},body:JSON.stringify({token})});
+    if(!r.ok)return 'ลงทะเบียนไม่สำเร็จ ('+r.status+')';
+    pushDone=true;return 'ok';
+  }catch(e){return 'ผิดพลาด: '+(e.code||e.message)}
+}
+async function notifyPush(payload){
+  try{
+    const idt=await user.getIdToken();
+    await fetch(TOKEN_URL+'/notify',{method:'POST',headers:{Authorization:'Bearer '+idt,'Content-Type':'application/json'},body:JSON.stringify(payload)});
+  }catch(_){}
+}
+function pushBanner(){
+  if(!('Notification' in window)||!('serviceWorker' in navigator))return null;
+  if(Notification.permission==='granted'){setupPush(false);return null}
+  if(Notification.permission==='denied')return null;
+  const box=h('div',{class:'instbar',style:'margin:0 0 12px'});
+  const msg=h('span',{},'🔔 เปิดแจ้งเตือน เพื่อรู้ทันทีเมื่อมีประกาศสดหรือเรื่องแจ้งปัญหาใหม่');
+  const btn=h('button',{class:'sm',onclick:async()=>{
+    btn.disabled=true;const r=await setupPush(true);
+    if(r==='ok')box.remove();else{msg.textContent='เปิดแจ้งเตือนไม่สำเร็จ: '+r;btn.disabled=false}
+  }},'เปิด');
+  box.append(msg,btn);return box;
+}
+function vapidCard(){
+  const inp=h('input',{placeholder:'วางกุญแจสาธารณะ (Key pair)',autocomplete:'off'});
+  const msg=h('p',{class:'meta'});
+  getDoc(doc(db,'config','push')).then(x=>{if(x.exists())inp.value=x.data().vapid||''}).catch(()=>{});
+  return h('details',{class:'card'},h('summary',{},'ตั้งค่าการแจ้งเตือน (Push)'),
+    h('p',{class:'meta'},'Firebase → Project settings → Cloud Messaging → Web Push certificates → คัดลอก Key pair'),inp,
+    h('button',{class:'sm',onclick:async()=>{
+      try{await setDoc(doc(db,'config','push'),{vapid:inp.value.trim()});msg.textContent='บันทึกแล้ว'}catch(e){msg.textContent=e.message}
+    }},'บันทึก'),msg);
 }
 
 async function createProfile(uid,base,code){
@@ -726,7 +777,7 @@ function watchProfile(){
     if(!s.exists())return showRegister();
     profile=s.data();
     if(!profile.approved)return showPending();
-    if(!root.dataset.main){root.dataset.main='1';location.hash==='#receiver'?showReceiver():showMain()}
+    if(!root.dataset.main){root.dataset.main='1';location.hash==='#receiver'?showReceiver():showMain(location.hash==='#cmp'?'cmp':'news')}
   },showError));
 }
 
@@ -770,6 +821,7 @@ function showMain(tab='news'){
   if(tab==='members'&&isOwner())return Date.now()<membersUnlock?renderMembers(body):lockScreen(body);
   if(tab==='news'){
     const list=h('div');
+    {const pb=pushBanner();if(pb)body.append(pb)}
     body.append(isAdmin()?liveAdminCard():liveListenCard());
     if(isAdmin())body.append(composer());
     body.append(list);
@@ -843,7 +895,7 @@ function cmpForm(){
     try{
       files=await putFiles([...fi.files],t=>{msg.textContent=t});
       const r=await addDoc(collection(db,'complaints'),{uid:user.uid,name:profile.name,house:profile.house,phone:profile.phone||'',cat:cat.value,title:t.value.trim(),text:x.value.trim(),files,status:'new',createdAt:serverTimestamp()});
-      csSet(r.id,'new');t.value='';x.value='';fi.value='';
+      csSet(r.id,'new');notifyPush({type:'complaint',id:r.id});t.value='';x.value='';fi.value='';
       msg.textContent='✅ ส่งเรื่องแล้ว ผู้ดูแลจะรับเรื่องและแจ้งผลที่นี่';
     }catch(e){await delFiles(files);msg.textContent='ส่งไม่สำเร็จ: '+e.message}
     btn.disabled=false;
@@ -1006,7 +1058,7 @@ function renderMembers(body){
     left.textContent='🔓 ปลดล็อกอยู่ · ล็อกอัตโนมัติใน '+Math.floor(t/60000)+':'+String(Math.floor(t/1000)%60).padStart(2,'0');
   };
   tick();const iv=setInterval(tick,1000);unsubs.push(()=>clearInterval(iv));
-  body.append(bar,...(isOwner()?[pinCard()]:[]),settingsCard(),
+  body.append(bar,...(isOwner()?[pinCard(),vapidCard()]:[]),settingsCard(),
     h('h3',{style:'margin:14px 0 8px'},'รออนุมัติ / ถูกระงับ'),pend,
     h('h3',{style:'margin:14px 0 8px'},'สมาชิกทั้งหมด'),q,mem);
   let all=[];

@@ -1,4 +1,4 @@
-const CACHE = 'village-v1';
+const CACHE = 'village-v2';
 const SHELL = ['./', './index.html', './manifest.json', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', e => {
@@ -17,8 +17,7 @@ self.addEventListener('activate', e => {
   );
 });
 
-// Network-first for this site's own files: always fresh when online,
-// falls back to the saved copy when offline. Firebase / LiveKit / Cloudflare are never cached.
+// Network-first for this site's own files; Firebase / LiveKit / Cloudflare are never cached.
 self.addEventListener('fetch', e => {
   const r = e.request;
   if (r.method !== 'GET' || new URL(r.url).origin !== location.origin) return;
@@ -32,5 +31,38 @@ self.addEventListener('fetch', e => {
         return res;
       })
       .catch(() => caches.match(r).then(m => m || caches.match('./index.html')))
+  );
+});
+
+// Push notifications (sent by the Cloudflare Worker through Firebase Cloud Messaging)
+self.addEventListener('push', e => {
+  let d = {};
+  try {
+    const p = e.data ? e.data.json() : {};
+    d = p.data || p.notification || p || {};
+  } catch (_) {}
+  const title = d.title || 'ประกาศหมู่บ้าน';
+  e.waitUntil(self.registration.showNotification(title, {
+    body: d.body || '',
+    icon: 'icon-192.png',
+    badge: 'icon-192.png',
+    tag: d.tag || 'village',
+    renotify: true,
+    data: { url: d.url || './' }
+  }));
+});
+
+self.addEventListener('notificationclick', e => {
+  e.notification.close();
+  const url = new URL((e.notification.data && e.notification.data.url) || './', self.registration.scope).href;
+  e.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(cs => {
+      for (const c of cs) {
+        if (c.url.startsWith(self.registration.scope) && 'focus' in c) {
+          return c.focus().then(w => (w && 'navigate' in w) ? w.navigate(url) : w);
+        }
+      }
+      return self.clients.openWindow(url);
+    })
   );
 });
