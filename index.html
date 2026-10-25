@@ -678,7 +678,7 @@ function pushBanner(){
   const msg=h('span',{},'🔔 เปิดแจ้งเตือน เพื่อรู้ทันทีเมื่อมีประกาศสดหรือเรื่องแจ้งปัญหาใหม่');
   const btn=h('button',{class:'sm',onclick:async()=>{
     btn.disabled=true;const r=await setupPush(true);
-    if(r==='ok')box.remove();else{msg.textContent='เปิดแจ้งเตือนไม่สำเร็จ: '+r;btn.disabled=false}
+    if(r==='ok')box.remove();else{msg.textContent='เปิดแจ้งเตือนไม่สำเร็จ: '+r;btn.disabled=false;try{localStorage.setItem('pushErr',r+' | '+new Date().toLocaleString('th-TH'))}catch(_){}alert('เปิดแจ้งเตือนไม่สำเร็จ\n\n'+r+'\n\n(ถ่ายภาพหน้าจอนี้ส่งให้ผู้ดูแลระบบได้)')}
   }},'เปิด');
   box.append(msg,btn);return box;
 }
