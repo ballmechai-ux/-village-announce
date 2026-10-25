@@ -660,7 +660,7 @@ async function setupPush(ask){
     if(!token)return 'ไม่ได้รับโทเคน';
     const idt=await user.getIdToken();
     const r=await fetch(TOKEN_URL+'/register',{method:'POST',headers:{Authorization:'Bearer '+idt,'Content-Type':'application/json'},body:JSON.stringify({token})});
-    if(!r.ok)return 'ลงทะเบียนไม่สำเร็จ ('+r.status+')';
+    if(!r.ok){const j=await r.json().catch(()=>({}));return 'ลงทะเบียนไม่สำเร็จ ('+r.status+') '+(j.error||'')+' '+(j.detail||'')}
     pushDone=true;return 'ok';
   }catch(e){return 'ผิดพลาด: '+(e.code||e.message)}
 }
