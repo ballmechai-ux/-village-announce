@@ -116,6 +116,10 @@ h3{font-weight:500}
 .instbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:8px 16px 0;padding:10px 14px;background:var(--card);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);font-size:15px}
 .instbar span{flex:1;min-width:180px}
 @media(min-width:672px){.instbar{max-width:608px;margin:8px auto 0}}
+.item h3.atitle{color:var(--pri);font-size:21px;font-weight:600;line-height:1.35;margin-top:6px}
+.item.urgent h3.atitle{color:var(--amber)}
+.item.emergency h3.atitle{color:var(--red)}
+.adesc{color:color-mix(in srgb,var(--ink) 80%,var(--mut));margin-top:6px;white-space:pre-wrap;word-break:break-word}
 </style>
 </head>
 <body>
@@ -674,17 +678,51 @@ async function notifyPush(payload){
     await fetch(TOKEN_URL+'/notify',{method:'POST',headers:{Authorization:'Bearer '+idt,'Content-Type':'application/json'},body:JSON.stringify(payload)});
   }catch(_){}
 }
+async function testPush(){
+  try{
+    const idt=await user.getIdToken();
+    const r=await fetch(TOKEN_URL+'/notify',{method:'POST',headers:{Authorization:'Bearer '+idt,'Content-Type':'application/json'},body:JSON.stringify({type:'test'})});
+    const j=await r.json().catch(()=>({}));
+    if(r.ok)return '✅ ส่งทดสอบแล้ว รอไม่เกิน 1 นาที ถ้าไม่เด้งให้ตรวจการตั้งค่าแจ้งเตือนของมือถือ';
+    if(j.error==='bad type')return '⚠️ Worker ยังเป็นเวอร์ชันเก่า ให้วางโค้ด worker.js ใหม่แล้ว Deploy';
+    return '⚠️ ส่งทดสอบไม่สำเร็จ ('+r.status+') '+(j.error||'')+' '+(j.detail||'');
+  }catch(e){return '⚠️ ส่งไม่ได้: '+e.message}
+}
 function pushBanner(){
   if(!('Notification' in window)||!('serviceWorker' in navigator))return null;
-  if(Notification.permission==='granted'){setupPush(false);return null}
-  if(Notification.permission==='denied')return null;
   const box=h('div',{class:'instbar',style:'margin:0 0 12px'});
-  const msg=h('span',{},'🔔 เปิดแจ้งเตือน เพื่อรู้ทันทีเมื่อมีประกาศสดหรือเรื่องแจ้งปัญหาใหม่');
-  const btn=h('button',{class:'sm',onclick:async()=>{
+  const msg=h('span',{}),btn=h('button',{class:'sm'});
+  box.append(msg,btn);
+  const check=async()=>{
+    msg.textContent='🔔 แจ้งเตือน: กำลังตรวจสอบ…';btn.style.display='none';
+    const r=await setupPush(false);
+    if(r==='ok'){
+      msg.textContent='✅ แจ้งเตือนเปิดอยู่';
+      if(isAdmin()){
+        btn.textContent='ทดสอบ';btn.className='ghost sm';btn.style.display='';
+        btn.onclick=async()=>{btn.disabled=true;msg.textContent='กำลังส่งทดสอบ…';msg.textContent=await testPush();btn.disabled=false};
+      }
+    }else{
+      msg.textContent='⚠️ แจ้งเตือนยังใช้ไม่ได้: '+r;
+      btn.textContent='ลองใหม่';btn.className='sm';btn.style.display='';
+      btn.onclick=()=>{pushDone=false;check()};
+    }
+  };
+  if(Notification.permission==='granted'){check();return box}
+  if(Notification.permission==='denied'){
+    msg.textContent='🔕 แจ้งเตือนถูกบล็อก เปิดได้ที่การตั้งค่าแจ้งเตือนของเว็บ/แอปในมือถือ';btn.style.display='none';return box;
+  }
+  msg.textContent='🔔 เปิดแจ้งเตือน เพื่อรู้ทันทีเมื่อมีประกาศสดหรือเรื่องแจ้งปัญหาใหม่';btn.textContent='เปิด';
+  btn.onclick=async()=>{
     btn.disabled=true;const r=await setupPush(true);
-    if(r==='ok')box.remove();else{msg.textContent='เปิดแจ้งเตือนไม่สำเร็จ: '+r;btn.disabled=false;try{localStorage.setItem('pushErr',r+' | '+new Date().toLocaleString('th-TH'))}catch(_){}alert('เปิดแจ้งเตือนไม่สำเร็จ\n\n'+r+'\n\n(ถ่ายภาพหน้าจอนี้ส่งให้ผู้ดูแลระบบได้)')}
-  }},'เปิด');
-  box.append(msg,btn);return box;
+    if(r==='ok'){check()}
+    else{
+      msg.textContent='เปิดแจ้งเตือนไม่สำเร็จ: '+r;btn.disabled=false;
+      try{localStorage.setItem('pushErr',r+' | '+new Date().toLocaleString('th-TH'))}catch(_){}
+      alert('เปิดแจ้งเตือนไม่สำเร็จ\n\n'+r+'\n\n(ถ่ายภาพหน้าจอนี้ส่งให้ผู้ดูแลระบบได้)');
+    }
+  };
+  return box;
 }
 function vapidCard(){
   const inp=h('input',{placeholder:'วางกุญแจสาธารณะ (Key pair)',autocomplete:'off'});
@@ -857,7 +895,7 @@ function renderNews(list,anns){
     const a=d.data(),un=unreadOf(d),n=Math.max(0,a.msgCount||0);
     return h('div',{class:'card item '+a.level,onclick:()=>showThread(d.id,a)},
       h('span',{class:'tag '+a.level},LV[a.level]||'ทั่วไป'),a.type==='audio'?h('span',{class:'tag'},'🎧 เสียงบันทึก'):null,
-      h('h3',{},a.title),h('div',{},a.text),fileView(a.files),a.type==='audio'?audioPlayer(d.id,a):null,
+      h('h3',{class:'atitle'},a.title),h('div',{class:'adesc'},a.text),fileView(a.files),a.type==='audio'?audioPlayer(d.id,a):null,
       h('div',{class:'meta',style:'margin-top:8px'},when(a.createdAt)+' · แตะเพื่อถามหรือตอบ'),
       h('div',{class:'meta'},'💬 '+n+' ข้อความ',un?h('span',{class:'badge'},'ใหม่ '+un):null,
         a.lastMsgAt?.toDate?' · ล่าสุด '+hhmm(a.lastMsgAt)+' โดย '+(a.lastMsgName||''):''),
@@ -1093,7 +1131,7 @@ function showThread(id,a){
   const cb=chatBox(['announcements',id],{fixed:true});unsubs.push(cb.off);
   unsubs.push(onSnapshot(doc(db,'announcements',id),x=>{if(x.exists())seenSet(id,x.data().msgCount||0)},()=>{}));
   show(h('div',{class:'bar'},h('button',{class:'ghost sm',onclick:()=>showMain()},'‹ กลับ'),logoutBtn()),
-    h('div',{class:'card item '+a.level},h('span',{class:'tag '+a.level},LV[a.level]||'ทั่วไป'),h('h3',{},a.title),h('div',{},a.text),
+    h('div',{class:'card item '+a.level},h('span',{class:'tag '+a.level},LV[a.level]||'ทั่วไป'),h('h3',{class:'atitle'},a.title),h('div',{class:'adesc'},a.text),
       fileView(a.files),a.type==='audio'?audioPlayer(id,a):null,h('div',{class:'meta'},when(a.createdAt))),
     h('h3',{style:'margin:14px 0 8px'},'ถาม-ตอบ'),cb.el);
   root.classList.add('hasfix');
