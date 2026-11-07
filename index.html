@@ -120,10 +120,12 @@ h3{font-weight:500}
 .item.urgent h3.atitle{color:var(--amber)}
 .item.emergency h3.atitle{color:var(--red)}
 .adesc{color:color-mix(in srgb,var(--ink) 80%,var(--mut));margin-top:6px;white-space:pre-wrap;word-break:break-word}
+#ver{position:fixed;left:8px;bottom:2px;font-size:10px;color:var(--mut);opacity:.65;pointer-events:none;z-index:1}
 </style>
 </head>
 <body>
 <main id="app"><p class="center">กำลังโหลด…</p></main>
+<div id="ver">เวอร์ชัน 07/11-b</div>
 <script type="module">
 import{initializeApp}from"https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import{getAuth,GoogleAuthProvider,signInWithPopup,signOut,onAuthStateChanged,createUserWithEmailAndPassword,signInWithEmailAndPassword}from"https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
@@ -526,7 +528,7 @@ function liveAdminCard(){
   const iv=setInterval(paintCount,1500);
   unsubs.push(()=>clearInterval(iv));
   let lastLive=null;
-  const clear=h('button',{class:'ghost sm',style:'display:none',onclick:async()=>{await offLive();cleanupLive(lastLive?.announcementId)}},'ล้างสถานะสดที่ค้างอยู่');
+  const clear=h('button',{class:'ghost sm',style:'display:none',onclick:async()=>{if(!confirm('ล้างสถานะสด?\nถ้ามีคนกำลังประกาศอยู่จริง จะเป็นการตัดการประกาศของเขา'))return;await offLive();cleanupLive(lastLive?.announcementId)}},'ล้างสถานะสดที่ค้างอยู่');
   const hold=h('div'),cs={id:null,off:null},saveBox=h('div');
   const renderSave=()=>{
     saveBox.replaceChildren();
