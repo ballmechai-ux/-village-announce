@@ -1,4 +1,4 @@
-const CACHE = 'village-v2';
+const CACHE = 'village-v4';
 const SHELL = ['./', './index.html', './manifest.json', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', e => {
@@ -17,20 +17,22 @@ self.addEventListener('activate', e => {
   );
 });
 
-// Network-first for this site's own files; Firebase / LiveKit / Cloudflare are never cached.
+// Network-first with a 3-second limit: fresh files when the network is good,
+// the saved copy when it is slow or offline. Firebase / LiveKit / Cloudflare are never cached.
 self.addEventListener('fetch', e => {
   const r = e.request;
   if (r.method !== 'GET' || new URL(r.url).origin !== location.origin) return;
+  const fromNet = fetch(r).then(res => {
+    if (res.ok && res.status === 200) {
+      const copy = res.clone();
+      caches.open(CACHE).then(c => c.put(r, copy));
+    }
+    return res;
+  });
+  const timeout = new Promise((_, rej) => setTimeout(() => rej(new Error('slow')), 3000));
   e.respondWith(
-    fetch(r)
-      .then(res => {
-        if (res.ok && res.status === 200) {
-          const copy = res.clone();
-          caches.open(CACHE).then(c => c.put(r, copy));
-        }
-        return res;
-      })
-      .catch(() => caches.match(r).then(m => m || caches.match('./index.html')))
+    Promise.race([fromNet, timeout])
+      .catch(() => caches.match(r).then(m => m || fromNet.catch(() => caches.match('./index.html'))))
   );
 });
 
@@ -41,13 +43,16 @@ self.addEventListener('push', e => {
     const p = e.data ? e.data.json() : {};
     d = p.data || p.notification || p || {};
   } catch (_) {}
-  const title = d.title || 'ประกาศหมู่บ้าน';
+  const isCmp = String(d.tag || '').startsWith('cmp-');
+  const title = isCmp ? '📣 มีแจ้งจากลูกบ้าน' : (d.title || 'ประกาศหมู่บ้าน');
   e.waitUntil(self.registration.showNotification(title, {
     body: d.body || '',
     icon: 'icon-192.png',
     badge: 'icon-192.png',
     tag: d.tag || 'village',
     renotify: true,
+    requireInteraction: isCmp,
+    vibrate: isCmp ? [400, 200, 400, 200, 800] : [200, 100, 200],
     data: { url: d.url || './' }
   }));
 });
