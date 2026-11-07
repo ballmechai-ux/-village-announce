@@ -171,6 +171,10 @@ addEventListener('beforeinstallprompt',e=>{e.preventDefault();deferredInstall=e;
 addEventListener('appinstalled',()=>{deferredInstall=null;document.getElementById('inst')?.remove()});
 installBar();
 if('serviceWorker' in navigator)addEventListener('load',()=>navigator.serviceWorker.register('./sw.js').catch(()=>{}));
+const clearNotifs=()=>{try{navigator.serviceWorker.ready.then(r=>r.getNotifications()).then(ns=>ns.forEach(n=>n.close())).catch(()=>{})}catch(_){}};
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')clearNotifs()});
+addEventListener('focus',clearNotifs);
+addEventListener('load',clearNotifs);
 
 onAuthStateChanged(auth,async u=>{
   clean();stopRooms();membersUnlock=0;delete root.dataset.main;user=u;profile=null;
