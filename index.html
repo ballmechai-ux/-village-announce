@@ -125,7 +125,7 @@ h3{font-weight:500}
 </head>
 <body>
 <main id="app"><p class="center">กำลังโหลด…</p></main>
-<div id="ver">เวอร์ชัน 07/11-b</div>
+<div id="ver">เวอร์ชัน 07/11-c</div>
 <script type="module">
 import{initializeApp}from"https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import{getAuth,GoogleAuthProvider,signInWithPopup,signOut,onAuthStateChanged,createUserWithEmailAndPassword,signInWithEmailAndPassword}from"https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
@@ -680,6 +680,34 @@ function showReceiver(){
   };
 }
 
+const voiceOn=()=>{try{return localStorage.getItem('voiceOff')!=='1'}catch(_){return true}};
+function chime(){
+  try{
+    const ac=new(window.AudioContext||window.webkitAudioContext)();
+    const t=ac.currentTime;
+    [[880,0],[660,0.2]].forEach(([f,d])=>{
+      const o=ac.createOscillator(),g=ac.createGain();
+      o.frequency.value=f;o.connect(g);g.connect(ac.destination);
+      g.gain.setValueAtTime(0.0001,t+d);
+      g.gain.exponentialRampToValueAtTime(0.4,t+d+0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001,t+d+0.32);
+      o.start(t+d);o.stop(t+d+0.34);
+    });
+    setTimeout(()=>{try{ac.close()}catch(_){}},1000);
+  }catch(_){}
+}
+function speakThai(text){
+  chime();
+  try{
+    if(!('speechSynthesis' in window))return;
+    const u=new SpeechSynthesisUtterance(text);
+    u.lang='th-TH';u.rate=0.95;
+    const v=speechSynthesis.getVoices().find(x=>/^th/i.test(x.lang));
+    if(v)u.voice=v;
+    setTimeout(()=>{try{speechSynthesis.cancel();speechSynthesis.speak(u)}catch(_){}},750);
+  }catch(_){}
+}
+
 let pushDone=false;
 async function setupPush(ask){
   try{
@@ -722,6 +750,16 @@ function pushBanner(){
   const box=h('div',{class:'instbar',style:'margin:0 0 12px'});
   const msg=h('span',{}),btn=h('button',{class:'sm'});
   box.append(msg,btn);
+  if(isAdmin()){
+    const vbtn=h('button',{class:'ghost sm'});
+    const pv=()=>{vbtn.textContent=voiceOn()?'🔊 เสียงพูด: เปิด':'🔇 เสียงพูด: ปิด'};
+    pv();
+    vbtn.onclick=()=>{
+      try{localStorage.setItem('voiceOff',voiceOn()?'1':'0')}catch(_){}
+      pv();if(voiceOn())speakThai('ทดสอบเสียง มีเรื่องแจ้งจากลูกบ้าน');
+    };
+    box.append(vbtn);
+  }
   const check=async()=>{
     msg.textContent='🔔 แจ้งเตือน: กำลังตรวจสอบ…';btn.style.display='none';
     const r=await setupPush(false);
@@ -872,7 +910,7 @@ function showMain(tab='news'){
   show(h('div',{class:'bar hero'},h('div',{},h('h1',{},'🏡 ประกาศหมู่บ้าน'),h('div',{class:'who'},profile.name+' · บ้าน '+profile.house+(RL[profile.role]?' · '+RL[profile.role]:''))),logoutBtn()),
     h('div',{class:'tabs'},tb('news','ประกาศ',nb),tb('cmp','แจ้งปัญหา',cb),isOwner()?tb('members','สมาชิก'):null),body);
   const setB=(el,n)=>{el.textContent=n>99?'99+':String(n);el.style.display=n?'':'none'};
-  let anns=[],cmps=[],paintTab=()=>{};
+  let anns=[],cmps=[],cmpFirst=true,paintTab=()=>{};
   const paintBadges=()=>{
     const un=anns.reduce((t,d)=>t+unreadOf(d),0);
     const cn=isAdmin()?cmps.filter(d=>d.data().status==='new').length:cmps.filter(d=>{const c=d.data();return c.status!=='new'&&csGet(d.id)!==c.status}).length;
@@ -887,6 +925,8 @@ function showMain(tab='news'){
   },showError));
   unsubs.push(onSnapshot(isAdmin()?query(collection(db,'complaints'),orderBy('createdAt','desc'),limit(100)):query(collection(db,'complaints'),where('uid','==',user.uid)),snap=>{
     cmps=snap.docs;paintBadges();if(tab==='cmp')paintTab();
+    if(isAdmin()&&!cmpFirst&&voiceOn()&&snap.docChanges().some(c=>c.type==='added'&&c.doc.data().status==='new'&&!c.doc.metadata.hasPendingWrites))speakThai('มีเรื่องแจ้งจากลูกบ้าน');
+    cmpFirst=false;
   },()=>{}));
 
   if(tab==='members'&&isOwner())return Date.now()<membersUnlock?renderMembers(body):lockScreen(body);
